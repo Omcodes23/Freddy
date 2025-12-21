@@ -1,0 +1,7 @@
+name: FreddyAI
+version: 1.0
+main: com.freddy.plugin.FreddyPlugin
+api-version: 1.21
+
+depend:
+  - Citizens
