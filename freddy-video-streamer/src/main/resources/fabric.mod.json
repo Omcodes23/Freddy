@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "freddy-video-streamer",
+  "version": "1.0.0",
+  "name": "Freddy Video Streamer",
+  "description": "Streams real-time video from Minecraft client to Freddy AI dashboard",
+  "authors": ["FreddyAI"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.freddy.videostream.VideoStreamerMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21"
+  }
+}
