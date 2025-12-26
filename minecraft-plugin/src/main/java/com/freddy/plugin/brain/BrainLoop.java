@@ -109,6 +109,18 @@ public class BrainLoop extends BukkitRunnable {
             return;
         }
         
+        // Pause autonomous LLM-driven actions when AIBrainLoop has an active goal
+        try {
+            com.freddy.plugin.brain.AIBrainLoop aiLoop = com.freddy.plugin.FreddyPlugin.getAIBrainLoop();
+            if (aiLoop != null) {
+                com.freddy.plugin.npc.Goal current = aiLoop.getCurrentGoal();
+                if (current != null && current.getStatus() == com.freddy.plugin.npc.Goal.GoalStatus.IN_PROGRESS) {
+                    // Skip this tick to avoid conflicting behaviors
+                    return;
+                }
+            }
+        } catch (Throwable ignore) { }
+        
         tickCount++;
         telemetry.sendTick(tickCount);
         

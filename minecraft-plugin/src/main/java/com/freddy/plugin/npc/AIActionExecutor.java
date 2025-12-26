@@ -21,6 +21,10 @@ public class AIActionExecutor {
         this.npcController = controller;
         this.npcEntity = npcEntity;
     }
+
+    public void setNPCEntity(Player npcEntity) {
+        this.npcEntity = npcEntity;
+    }
     
     /**
      * Mine nearest ore/block of specific type
@@ -28,7 +32,7 @@ public class AIActionExecutor {
     public void mineNearestBlock(Material blockType, int range) {
         if (npcEntity == null) return;
         
-        Location npcLoc = npcEntity.getLocation();
+        Location baseLoc = npcEntity.getLocation();
         Block nearest = null;
         double closestDistance = range;
         
@@ -36,9 +40,10 @@ public class AIActionExecutor {
         for (int x = -range; x <= range; x++) {
             for (int y = -range; y <= range; y++) {
                 for (int z = -range; z <= range; z++) {
-                    Block block = npcLoc.add(x, y, z).getBlock();
+                    Location probe = baseLoc.clone().add(x, y, z);
+                    Block block = probe.getBlock();
                     if (block.getType() == blockType) {
-                        double distance = npcLoc.distance(block.getLocation());
+                        double distance = baseLoc.distance(block.getLocation());
                         if (distance < closestDistance) {
                             nearest = block;
                             closestDistance = distance;
@@ -49,12 +54,47 @@ public class AIActionExecutor {
         }
         
         if (nearest != null) {
-            logger.info("[AI] Found " + blockType + " at " + nearest.getLocation());
-            npcController.walkTo(nearest.getX(), nearest.getY(), nearest.getZ());
-            // After walking, mine it
-            npcController.mineBlock(nearest.getX(), nearest.getY(), nearest.getZ());
+            Location targetLoc = nearest.getLocation();
+            double distanceToTarget = baseLoc.distance(targetLoc);
+            
+            logger.info("[AI] Found " + blockType + " at (" + (int)targetLoc.getX() + ", " + (int)targetLoc.getY() + ", " + (int)targetLoc.getZ() + ") distance: " + String.format("%.1f", distanceToTarget));
+            
+            // If close enough (within 5 blocks), mine it directly
+            if (distanceToTarget <= 1.5) {
+                logger.info("[AI] Mining " + blockType + " at location");
+                npcController.mineBlock((int)targetLoc.getX(), (int)targetLoc.getY(), (int)targetLoc.getZ());
+                
+                // Send telemetry about the action
+                try {
+                    com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                    if (t != null) t.send("ACTION:MINING " + blockType + " at " + (int)targetLoc.getX() + "," + (int)targetLoc.getY() + "," + (int)targetLoc.getZ());
+                } catch (Exception ignore) { }
+            } else {
+                // Walk towards it first
+                logger.info("[AI] Walking to " + blockType);
+                npcController.walkTo(targetLoc.getX(), targetLoc.getY(), targetLoc.getZ());
+                // Queue mining action to execute once movement progresses
+                int tx = (int)targetLoc.getX();
+                int ty = (int)targetLoc.getY();
+                int tz = (int)targetLoc.getZ();
+                if (!npcController.hasQueuedMineAt(tx, ty, tz)) {
+                    npcController.queueAction(new NPCAction.MineBlock(tx, ty, tz));
+                }
+                
+                try {
+                    com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                    if (t != null) t.send("ACTION:WALKING_TO " + blockType + " at " + (int)targetLoc.getX() + "," + (int)targetLoc.getY() + "," + (int)targetLoc.getZ());
+                } catch (Exception ignore) { }
+            }
         } else {
-            logger.warning("[AI] No " + blockType + " found within " + range + " blocks");
+            logger.warning("[AI] No " + blockType + " found within " + range + " blocks, exploring...");
+            // Fallback: explore to discover new terrain/resources
+            explore(Math.max(30, range));
+            
+            try {
+                com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                if (t != null) t.send("ACTION:EXPLORING to find " + blockType);
+            } catch (Exception ignore) { }
         }
     }
     
@@ -97,7 +137,7 @@ public class AIActionExecutor {
     public void farmCrops(int range) {
         if (npcEntity == null) return;
         
-        Location npcLoc = npcEntity.getLocation();
+        Location baseLoc = npcEntity.getLocation();
         Block nearest = null;
         double closestDistance = range;
         
@@ -110,10 +150,11 @@ public class AIActionExecutor {
         for (int x = -range; x <= range; x++) {
             for (int y = -range; y <= range; y++) {
                 for (int z = -range; z <= range; z++) {
-                    Block block = npcLoc.add(x, y, z).getBlock();
+                    Location probe = baseLoc.clone().add(x, y, z);
+                    Block block = probe.getBlock();
                     for (Material crop : crops) {
                         if (block.getType() == crop) {
-                            double distance = npcLoc.distance(block.getLocation());
+                            double distance = baseLoc.distance(block.getLocation());
                             if (distance < closestDistance) {
                                 nearest = block;
                                 closestDistance = distance;
@@ -205,12 +246,21 @@ public class AIActionExecutor {
      * Gather specific resource intelligently
      */
     public void gatherResource(String resourceType) {
-        logger.info("[AI] Gathering: " + resourceType);
+        logger.info("[AI] 🎯 Gathering: " + resourceType);
         
         switch (resourceType.toUpperCase()) {
             case "WOOD":
             case "LOG":
-                mineNearestBlock(Material.OAK_LOG, 20);
+                // Try all wood types
+                Material[] woodTypes = {Material.OAK_LOG, Material.BIRCH_LOG, Material.SPRUCE_LOG, Material.JUNGLE_LOG, Material.ACACIA_LOG, Material.DARK_OAK_LOG};
+                for (Material wood : woodTypes) {
+                    if (findNearbyBlock(wood, 30) != null) {
+                        mineNearestBlock(wood, 30);
+                        return;
+                    }
+                }
+                logger.warning("[AI] No wood found, exploring...");
+                explore(40);
                 break;
             case "STONE":
                 mineNearestBlock(Material.STONE, 20);
@@ -234,5 +284,34 @@ public class AIActionExecutor {
             default:
                 explore(30);
         }
+    }
+    
+    /**
+     * Find nearest block of specific type (returns location or null)
+     */
+    private Location findNearbyBlock(Material blockType, int range) {
+        if (npcEntity == null) return null;
+        
+        Location baseLoc = npcEntity.getLocation();
+        Block nearest = null;
+        double closestDistance = range;
+        
+        for (int x = -range; x <= range; x++) {
+            for (int y = -range; y <= range; y++) {
+                for (int z = -range; z <= range; z++) {
+                    Location probe = baseLoc.clone().add(x, y, z);
+                    Block block = probe.getBlock();
+                    if (block.getType() == blockType) {
+                        double distance = baseLoc.distance(block.getLocation());
+                        if (distance < closestDistance) {
+                            nearest = block;
+                            closestDistance = distance;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return nearest != null ? nearest.getLocation() : null;
     }
 }

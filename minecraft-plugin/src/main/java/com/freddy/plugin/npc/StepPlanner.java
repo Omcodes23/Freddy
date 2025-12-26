@@ -6,9 +6,25 @@ import java.util.*;
 
 public class StepPlanner {
     /**
-     * Generate steps using the LLM. Falls back to a built-in plan on error.
+     * Fast step generation: use predefined steps for common goals.
+     * Only call LLM for complex goals where extra refinement is helpful.
      */
     public static List<GoalStep> planFor(Goal.GoalType goalType) {
+        // Simple goals: return predefined steps immediately (fast)
+        switch (goalType) {
+            case GATHER_WOOD:
+            case GATHER_STONE:
+            case HUNT_ANIMALS:
+            case FARM_CROPS:
+            case EXPLORE_AREA:
+            case FOLLOW_PLAYER:
+            case BUILD_STRUCTURE:
+                return fallbackPlan(goalType);
+            default:
+                break;
+        }
+
+        // Complex goals: try LLM briefly, else fallback
         try {
             List<GoalStep> llmSteps = planWithLLM(goalType);
             if (!llmSteps.isEmpty()) return llmSteps;
@@ -17,10 +33,9 @@ public class StepPlanner {
     }
 
     private static List<GoalStep> planWithLLM(Goal.GoalType goalType) {
-        String prompt = "You are planning discrete Minecraft steps for an autonomous NPC. " +
-                "Return STRICT JSON array of objects with fields: label (string), dependsOn (array of labels). " +
-                "No prose. Example: [{\"label\":\"Navigate to forest\",\"dependsOn\":[]},{\"label\":\"Collect 64 oak logs\",\"dependsOn\":[\"Navigate to forest\"]}]. " +
-                "Goal: " + goalType.name();
+        String prompt = "Plan MINIMAL steps for an autonomous Minecraft NPC. " +
+                "Return STRICT JSON array: [{\"label\":string,\"dependsOn\":[string,...]}]. " +
+                "No commentary. Use at most 3 steps. Goal: " + goalType.name();
 
         String response = LLMClient.ask(prompt);
         return parseStepsJson(response);

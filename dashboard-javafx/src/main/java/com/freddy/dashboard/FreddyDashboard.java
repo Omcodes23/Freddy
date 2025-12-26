@@ -19,6 +19,7 @@ import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.TilePane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -62,7 +63,8 @@ public class FreddyDashboard extends Application {
     private Label statusLabel;
     private StepGraphVisualizer stepGraphVisualizer;  // Goal steps graph visualization
     // Inventory UI refs
-    private GridPane inventoryGrid;
+    private GridPane inventoryGrid; // legacy, not used with TilePane but kept for structure
+    private TilePane inventoryTiles;
     private final java.util.List<Label> inventorySlots = new java.util.ArrayList<>();
     private Label inventoryItemCountLabel;
     private Label inventoryCapacityLabel;
@@ -192,36 +194,35 @@ public class FreddyDashboard extends Application {
         title.setFont(Font.font("Consolas", FontWeight.BOLD, 18));
         title.setTextFill(Color.web(ACCENT_BLUE));
         
-        // Inventory grid
-        inventoryGrid = new GridPane();
-        inventoryGrid.setHgap(10);
-        inventoryGrid.setVgap(10);
-        inventoryGrid.setPadding(new Insets(15));
-        inventoryGrid.setStyle("-fx-background-color: #1c2128; -fx-border-color: " + ACCENT_BLUE + "; -fx-border-width: 1;");
+        // Responsive inventory tiles: auto-wrap squares to fit available space
+        inventoryTiles = new TilePane();
+        inventoryTiles.setHgap(10);
+        inventoryTiles.setVgap(10);
+        inventoryTiles.setPadding(new Insets(15));
+        inventoryTiles.setPrefTileWidth(90);
+        inventoryTiles.setPrefTileHeight(90);
+        inventoryTiles.setStyle("-fx-background-color: #1c2128; -fx-border-color: " + ACCENT_BLUE + "; -fx-border-width: 1;");
         
-        // Create 36 inventory slots (2 rows of 18)
+        // Create inventory slots with responsive layout
         inventorySlots.clear();
         for (int i = 0; i < 36; i++) {
             Label slot = new Label("[ ]");
-            slot.setPrefWidth(40);
-            slot.setPrefHeight(40);
+            slot.setPrefWidth(90);
+            slot.setPrefHeight(90);
             slot.setStyle(
                 "-fx-background-color: #0f1419; " +
                 "-fx-border-color: #2b3d47; " +
                 "-fx-border-width: 1; " +
                 "-fx-text-fill: " + TEXT_SECONDARY + "; " +
                 "-fx-font-family: 'Consolas'; " +
-                "-fx-font-size: 10px; " +
+                "-fx-font-size: 12px; " +
                 "-fx-alignment: center;"
             );
-            
-            int row = i / 18;
-            int col = i % 18;
-            inventoryGrid.add(slot, col, row);
+            inventoryTiles.getChildren().add(slot);
             inventorySlots.add(slot);
         }
         
-        ScrollPane scrollPane = new ScrollPane(inventoryGrid);
+        ScrollPane scrollPane = new ScrollPane(inventoryTiles);
         scrollPane.setStyle("-fx-background-color: " + BG_PRIMARY + "; -fx-control-inner-background: " + BG_PRIMARY + ";");
         VBox.setVgrow(scrollPane, Priority.ALWAYS);
         
@@ -321,6 +322,11 @@ public class FreddyDashboard extends Application {
                 log("GOAL", "Button clicked: " + selectedGoal);
                 statusLabel.setText("✅ GOAL ACTIVATED: " + selectedGoal);
                 statusLabel.setTextFill(Color.web(ACCENT_GREEN));
+                
+                // Show loader while planning steps
+                if (stepGraphVisualizer != null) {
+                    stepGraphVisualizer.setLoading(true);
+                }
                 
                 // Send goal to plugin via command socket
                 sendGoalCommand(selectedGoal);
@@ -684,13 +690,13 @@ public class FreddyDashboard extends Application {
                     int count = Integer.parseInt(kv[1]);
                     totalItems += count;
                     if (slotIndex < inventorySlots.size()) {
-                        inventorySlots.get(slotIndex).setText("[" + mat + " x" + count + "]");
+                        inventorySlots.get(slotIndex).setText("[ " + mat + "  x" + count + " ]");
                         slotIndex++;
                     }
                 }
             }
             inventoryItemCountLabel.setText("📦 Items: " + totalItems);
-            inventoryCapacityLabel.setText("🔖 Capacity: " + parts.length + " / 64");
+            inventoryCapacityLabel.setText("🔖 Types: " + parts.length + " / " + inventorySlots.size() + " slots");
             inventoryWeightLabel.setText("⚖️ Weight: " + Math.max(0, totalItems / 8) + " kg");
         } catch (Exception e) {
             log("ERROR", "Inventory parse error: " + e.getMessage());
@@ -1112,6 +1118,7 @@ public class FreddyDashboard extends Application {
                 log("STEPS", "✓ Parsed " + stepDataList.size() + " steps, rendering graph...");
                 
                 // Update graph visualization
+                stepGraphVisualizer.setLoading(false);
                 stepGraphVisualizer.setSteps(stepDataList);
                 
                 log("STEPS", "✓ Step graph rendered with " + stepDataList.size() + " nodes");

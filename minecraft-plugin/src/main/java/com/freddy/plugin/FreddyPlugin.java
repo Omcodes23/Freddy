@@ -31,6 +31,50 @@ public class FreddyPlugin extends JavaPlugin {
     private static final String NPC_NAME = "Freddy";
     private static Map<String, Goal.GoalType> goalMap = new HashMap<>();
 
+    /**
+     * Ensure the AI brain loop is initialized once the Citizens NPC is available/spawned.
+     */
+    private static synchronized boolean ensureAIBrainLoopInitialized() {
+        if (aiBrainLoop != null) {
+            return true;
+        }
+
+        try {
+            NPC npc = StreamSupport.stream(
+                    CitizensAPI.getNPCRegistry().spliterator(),
+                    false
+            ).filter(n -> n.getName().equalsIgnoreCase(NPC_NAME)).findFirst().orElse(null);
+
+            if (npc == null) {
+                Bukkit.getLogger().warning("[AI] Citizens NPC '" + NPC_NAME + "' not found.");
+                return false;
+            }
+
+            if (npc.getEntity() == null) {
+                try {
+                    npc.spawn(Bukkit.getWorlds().get(0).getSpawnLocation());
+                    Bukkit.getLogger().info("[AI] Spawned NPC '" + NPC_NAME + "' for AI initialization.");
+                } catch (Exception e) {
+                    Bukkit.getLogger().severe("[AI] Failed to spawn NPC '" + NPC_NAME + "': " + e.getMessage());
+                    return false;
+                }
+            }
+
+            if (!(npc.getEntity() instanceof Player)) {
+                Bukkit.getLogger().warning("[AI] NPC '" + NPC_NAME + "' is not a player entity; AI cannot control it.");
+                return false;
+            }
+
+            aiBrainLoop = new AIBrainLoop(NPC_NAME);
+            aiBrainLoop.start();
+            Bukkit.getLogger().info("[AI] Brain loop initialized lazily for NPC '" + NPC_NAME + "'.");
+            return true;
+        } catch (Exception e) {
+            Bukkit.getLogger().severe("[AI] Error ensuring brain loop: " + e.getMessage());
+            return false;
+        }
+    }
+
     @Override
     public void onEnable() {
         getLogger().info("🤖 FreddyAI enabled, waiting for Citizens...");
@@ -75,6 +119,16 @@ public class FreddyPlugin extends JavaPlugin {
             getLogger().severe("❌ Freddy NPC not found! Create it using /npc create Freddy");
         } else {
             getLogger().info("✅ Freddy NPC linked successfully!");
+
+            // Ensure the NPC is spawned in the world
+            if (freddy.getEntity() == null) {
+                try {
+                    freddy.spawn(Bukkit.getWorlds().get(0).getSpawnLocation());
+                    getLogger().info("✅ Spawned Freddy at world spawn");
+                } catch (Exception e) {
+                    getLogger().severe("❌ Failed to spawn Freddy NPC: " + e.getMessage());
+                }
+            }
             
             // INITIALIZE AUTONOMOUS AI BRAIN LOOP
             initializeAIBrainLoop();
@@ -125,6 +179,15 @@ public class FreddyPlugin extends JavaPlugin {
         Goal.GoalType goalType = goalMap.getOrDefault(goalName.toUpperCase(), Goal.GoalType.EXPLORE_AREA);
         Bukkit.getLogger().info("📌 AI Goal: " + goalType + " - " + goalName);
 
+        // Ensure brain loop exists
+        if (!ensureAIBrainLoopInitialized()) {
+            Bukkit.getLogger().warning("⚠️ AI Brain Loop not initialized; cannot set goal.");
+            if (telemetry != null) {
+                telemetry.send("ERROR:AI Brain not initialized. Ensure Citizens NPC '" + NPC_NAME + "' exists and is spawned.");
+            }
+            return;
+        }
+
         // Plan asynchronously to avoid blocking the server thread while LLM responds
         new Thread(() -> {
             List<GoalStep> steps = StepPlanner.planFor(goalType);
@@ -149,14 +212,7 @@ public class FreddyPlugin extends JavaPlugin {
                         Bukkit.getLogger().info("   📡 Sent steps to dashboard");
                     }
 
-                    if (aiBrainLoop != null) {
-                        aiBrainLoop.setGoalWithSteps(goalType, "Goal: " + goalName, steps);
-                    } else {
-                        Bukkit.getLogger().warning("⚠️ AI Brain Loop not initialized! NPC might be missing.");
-                        if (telemetry != null) {
-                            telemetry.send("ERROR:AI Brain not initialized. Ensure Citizens is installed and NPC 'Freddy' exists.");
-                        }
-                    }
+                    aiBrainLoop.setGoalWithSteps(goalType, "Goal: " + goalName, steps);
                 }
             );
         }, "StepPlannerLLM").start();
@@ -240,5 +296,12 @@ public class FreddyPlugin extends JavaPlugin {
     
     public static BrainLoop getBrainLoop() {
         return brainLoop;
+    }
+
+    /**
+     * Expose AIBrainLoop to other components (e.g., BrainLoop coordination)
+     */
+    public static AIBrainLoop getAIBrainLoop() {
+        return aiBrainLoop;
     }
 }

@@ -129,10 +129,20 @@ public class StepGraphVisualizer extends Pane {
         return level;
     }
     
+    private boolean loading = false;
+    
     private void draw() {
         // Clear canvas
         gc.setFill(BG_CANVAS);
         gc.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
+        
+        if (loading) {
+            gc.setFill(COLOR_IN_PROGRESS);
+            gc.setFont(Font.font("Consolas", FontWeight.BOLD, 16));
+            gc.setTextAlign(TextAlignment.CENTER);
+            gc.fillText("Generating plan...", canvas.getWidth() / 2, canvas.getHeight() / 2);
+            return;
+        }
         
         // Draw edges first (behind nodes)
         for (StepNode node : nodes) {
@@ -145,6 +155,11 @@ public class StepGraphVisualizer extends Pane {
         for (StepNode node : nodes) {
             drawNode(node);
         }
+    }
+    
+    public void setLoading(boolean loading) {
+        this.loading = loading;
+        draw();
     }
 
     /**

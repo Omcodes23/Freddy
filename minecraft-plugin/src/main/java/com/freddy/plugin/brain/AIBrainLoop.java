@@ -31,22 +31,42 @@ public class AIBrainLoop extends BukkitRunnable {
     }
     
     /**
-     * Get NPC entity by name
+     * Get NPC entity by name or via Citizens NPC registry
      */
     private Player getNPCEntity() {
-        return Bukkit.getPlayer(npcName);
+        Player p = Bukkit.getPlayer(npcName);
+        if (p != null) return p;
+        try {
+            for (net.citizensnpcs.api.npc.NPC npc : net.citizensnpcs.api.CitizensAPI.getNPCRegistry()) {
+                if (npc.getName().equalsIgnoreCase(npcName) && npc.getEntity() instanceof Player) {
+                    return (Player) npc.getEntity();
+                }
+            }
+        } catch (Throwable ignore) { }
+        return null;
     }
     
     @Override
     public void run() {
         Player npcEntity = getNPCEntity();
         if (npcEntity == null) {
-            logger.warning("[AI BRAIN] NPC entity not found: " + npcName);
+            if (tickCount % 100 == 0) { // log and telemetry every ~5s
+                logger.warning("[AI BRAIN] NPC entity not found: " + npcName);
+                try {
+                    com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                    if (t != null) t.send("ERROR:NPC entity not found; ensure Citizens NPC '" + npcName + "' exists and is spawned.");
+                } catch (Exception ignore) { }
+            }
             return;
         }
         
         // Update NPC entity reference
         npcController.setNPCEntity(npcEntity);
+        // Keep behavior and executor in sync with current entity
+        aiBehavior.setNPCEntity(npcEntity);
+        if (actionExecutor != null) {
+            actionExecutor.setNPCEntity(npcEntity);
+        }
         
         // Main AI tick
         aiBehavior.tick();

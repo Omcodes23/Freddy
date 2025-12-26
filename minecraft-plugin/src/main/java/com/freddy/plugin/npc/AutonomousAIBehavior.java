@@ -18,6 +18,7 @@ public class AutonomousAIBehavior {
     private AIActionExecutor executor;
     private GoalManager goalManager;
     private Player npcEntity;
+    private int followSearchRadius = 20;
     
     private int tickCounter = 0;
     private int decisionInterval = 40;  // Make decisions every 2 seconds at 20 TPS
@@ -26,6 +27,13 @@ public class AutonomousAIBehavior {
         this.npcController = controller;
         this.executor = executor;
         this.goalManager = goals;
+        this.npcEntity = npc;
+    }
+
+    /**
+     * Update NPC entity reference (called from brain loop each tick)
+     */
+    public void setNPCEntity(Player npc) {
         this.npcEntity = npc;
     }
     
@@ -61,6 +69,12 @@ public class AutonomousAIBehavior {
         if (currentGoal == null) {
             logger.info("[AI] No goal - exploring");
             executor.explore(40);
+            try {
+                com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                if (t != null && tickCounter % decisionInterval == 0) {
+                    t.send("ACTION:EXPLORING_NO_GOAL");
+                }
+            } catch (Exception ignore) { }
             return;
         }
         
@@ -83,11 +97,14 @@ public class AutonomousAIBehavior {
         // Mark step as in progress
         if (currentStep.getStatus() == GoalStep.StepStatus.PENDING) {
             currentStep.setStatus(GoalStep.StepStatus.IN_PROGRESS);
-            logger.info("[AI] 🔄 Starting step " + (currentGoal.getCurrentStepIndex() + 1) + ": " + currentStep.getLabel());
+            logger.info("[AI] 🔄 Starting step " + (currentGoal.getCurrentStepIndex() + 1) + "/" + currentGoal.getSteps().size() + ": " + currentStep.getLabel());
             // Telemetry: step started
             try {
                 com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
-                if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + currentStep.getId() + "\",\"status\":\"IN_PROGRESS\"}");
+                if (t != null) {
+                    t.send("GOAL_STEP_UPDATE:{\"id\":\"" + currentStep.getId() + "\",\"status\":\"IN_PROGRESS\"}");
+                    t.send("ACTION:STEP " + (currentGoal.getCurrentStepIndex() + 1) + "/" + currentGoal.getSteps().size() + ": " + currentStep.getLabel());
+                }
             } catch (Exception ignore) { }
         }
         
@@ -111,94 +128,81 @@ public class AutonomousAIBehavior {
         // Determine what to do based on step label and goal type
         switch (goalType) {
             case "GATHER_WOOD":
-                if (stepLabel.contains("navigate") || stepLabel.contains("forest")) {
-                    executor.explore(30); // Navigate to forest
+                // Check if we have enough wood
+                if (inventory.getCount(Material.OAK_LOG) + inventory.getCount(Material.BIRCH_LOG) + 
+                    inventory.getCount(Material.SPRUCE_LOG) + inventory.getCount(Material.JUNGLE_LOG) >= 64) {
                     goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
+                    logger.info("[AI] ✓ Step complete: " + step.getLabel() + " (collected enough wood)");
                     try {
                         com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
                         if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
                     } catch (Exception ignore) { }
-                } else if (stepLabel.contains("collect") || stepLabel.contains("logs")) {
-                    if (inventory.getCount(Material.OAK_LOG) >= 64) {
-                        goal.completeCurrentStep();
-                        logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    } else {
-                        executor.gatherResource("WOOD");
-                    }
-                } else if (stepLabel.contains("return") || stepLabel.contains("base")) {
-                    // TODO: Return to base - for now just complete
-                    goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    try {
-                        com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
-                        if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
-                    } catch (Exception ignore) { }
+                } else {
+                    // Keep gathering wood
+                    executor.gatherResource("WOOD");
                 }
                 break;
                 
             case "GATHER_STONE":
-                if (stepLabel.contains("find") || stepLabel.contains("stone") || stepLabel.contains("cave")) {
-                    executor.explore(30);
+                // Check if we have enough stone
+                if (inventory.getCount(Material.STONE) >= 64) {
                     goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("mine") || stepLabel.contains("blocks")) {
-                    if (inventory.getCount(Material.STONE) >= 64) {
-                        goal.completeCurrentStep();
-                        logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    } else {
-                        executor.gatherResource("STONE");
-                    }
+                    logger.info("[AI] ✓ Step complete: " + step.getLabel() + " (collected " + inventory.getCount(Material.STONE) + " stone)");
+                    try {
+                        com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                        if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
+                    } catch (Exception ignore) { }
+                } else {
+                    // Keep gathering stone
+                    logger.info("[AI] Gathering stone... (" + inventory.getCount(Material.STONE) + "/64)");
+                    executor.gatherResource("STONE");
                 }
                 break;
                 
             case "MINE_DIAMONDS":
-                if (stepLabel.contains("locate") || stepLabel.contains("cave")) {
-                    executor.explore(40);
+                // Check if we have enough diamonds
+                if (inventory.getCount(Material.DIAMOND) >= 10) {
                     goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("descend") || stepLabel.contains("diamond level")) {
-                    executor.explore(30);
-                    goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("mine") || stepLabel.contains("diamond")) {
-                    if (inventory.getCount(Material.DIAMOND) >= 10) {
-                        goal.completeCurrentStep();
-                        logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    } else {
-                        executor.gatherResource("DIAMONDS");
-                    }
+                    logger.info("[AI] ✓ Step complete: " + step.getLabel() + " (collected " + inventory.getCount(Material.DIAMOND) + " diamonds)");
+                    try {
+                        com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                        if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
+                    } catch (Exception ignore) { }
+                } else {
+                    // Keep mining diamonds
+                    logger.info("[AI] Mining diamonds... (" + inventory.getCount(Material.DIAMOND) + "/10)");
+                    executor.gatherResource("DIAMONDS");
                 }
                 break;
                 
             case "HUNT_ANIMALS":
-                if (stepLabel.contains("locate") || stepLabel.contains("animals")) {
-                    executor.explore(20);
+                // Check if we have enough food
+                if (inventory.getCount(Material.COOKED_BEEF) + inventory.getCount(Material.COOKED_PORKCHOP) + 
+                    inventory.getCount(Material.COOKED_CHICKEN) >= 32) {
                     goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("hunt") || stepLabel.contains("collect") || stepLabel.contains("food")) {
-                    if (inventory.getCount(Material.COOKED_BEEF) >= 32 || 
-                        inventory.getCount(Material.COOKED_PORKCHOP) >= 32) {
-                        goal.completeCurrentStep();
-                        logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    } else {
-                        executor.huntAnimals(30);
-                    }
+                    logger.info("[AI] ✓ Step complete: " + step.getLabel() + " (collected enough food)");
+                    try {
+                        com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                        if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
+                    } catch (Exception ignore) { }
+                } else {
+                    // Keep hunting
+                    executor.huntAnimals(30);
                 }
                 break;
                 
             case "FARM_CROPS":
-                if (stepLabel.contains("find") || stepLabel.contains("farmable")) {
-                    executor.explore(20);
+                // Check if we have enough crops
+                if (inventory.getCount(Material.WHEAT) >= 32) {
                     goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("harvest") || stepLabel.contains("wheat") || stepLabel.contains("crops")) {
-                    if (inventory.getCount(Material.WHEAT) >= 32) {
-                        goal.completeCurrentStep();
-                        logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                    } else {
-                        executor.farmCrops(20);
-                    }
+                    logger.info("[AI] ✓ Step complete: " + step.getLabel() + " (collected " + inventory.getCount(Material.WHEAT) + " wheat)");
+                    try {
+                        com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                        if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
+                    } catch (Exception ignore) { }
+                } else {
+                    // Keep farming
+                    executor.farmCrops(20);
                 }
                 break;
                 
@@ -231,17 +235,44 @@ public class AutonomousAIBehavior {
                 
             case "FOLLOW_PLAYER":
                 if (stepLabel.contains("find") || stepLabel.contains("nearest player")) {
-                    executor.explore(20);
-                    goal.completeCurrentStep();
-                    logger.info("[AI] ✓ Step complete: " + step.getLabel());
-                } else if (stepLabel.contains("follow")) {
+                    // Try to detect a target player
                     Location npcLoc = npcEntity.getLocation();
+                    Player target = null;
                     for (org.bukkit.entity.Entity entity : npcLoc.getWorld().getEntities()) {
                         if (entity instanceof Player && !entity.getName().equals(npcEntity.getName())) {
-                            Player player = (Player) entity;
-                            npcController.walkTo(player.getX(), player.getY(), player.getZ());
+                            target = (Player) entity;
                             break;
                         }
+                    }
+                    if (target != null) {
+                        goal.completeCurrentStep();
+                        logger.info("[AI] ✓ Player located: " + target.getName());
+                        try {
+                            com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                            if (t != null) t.send("GOAL_STEP_UPDATE:{\"id\":\"" + step.getId() + "\",\"status\":\"COMPLETED\"}");
+                        } catch (Exception ignore) { }
+                    } else {
+                        // Expand search radius progressively
+                        executor.explore(Math.min(followSearchRadius, 100));
+                        followSearchRadius = Math.min(followSearchRadius + 10, 100);
+                        logger.info("[AI] 🔍 Searching for player, radius=" + followSearchRadius);
+                        // Keep step in progress until player is found
+                    }
+                } else if (stepLabel.contains("follow")) {
+                    Location npcLoc = npcEntity.getLocation();
+                    Player target = null;
+                    for (org.bukkit.entity.Entity entity : npcLoc.getWorld().getEntities()) {
+                        if (entity instanceof Player && !entity.getName().equals(npcEntity.getName())) {
+                            target = (Player) entity;
+                            break;
+                        }
+                    }
+                    if (target != null) {
+                        npcController.walkTo(target.getX(), target.getY(), target.getZ());
+                    } else {
+                        // Fallback: keep exploring and re-check next decision tick
+                        executor.explore(20);
+                        logger.info("[AI] 🤝 No player found, exploring while seeking...");
                     }
                 }
                 break;

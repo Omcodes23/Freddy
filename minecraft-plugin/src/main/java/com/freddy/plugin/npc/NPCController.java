@@ -21,9 +21,11 @@ public class NPCController {
     
     private final String npcName;
     private Player npcEntity;
+    private net.citizensnpcs.api.npc.NPC citizensNpc;
     private NPCInventory npcInventory;
     private Location currentGoal;
     private Queue<NPCAction> actionQueue = new LinkedList<>();
+    private boolean creativeMode = true; // Allow creative-like actions by default
     
     public NPCController(String npcName) {
         this.npcName = npcName;
@@ -34,8 +36,24 @@ public class NPCController {
      * Set NPC entity reference (when NPC spawns)
      */
     public void setNPCEntity(Player entity) {
+        if (this.npcEntity == entity) return; // Skip if same entity
         this.npcEntity = entity;
-        logger.info("NPC Controller initialized for: " + npcName);
+        // Only log once when entity changes
+        if (entity != null && citizensNpc == null) {
+            try {
+                for (net.citizensnpcs.api.npc.NPC npc : net.citizensnpcs.api.CitizensAPI.getNPCRegistry()) {
+                    if (npc.getName().equalsIgnoreCase(npcName)) {
+                        this.citizensNpc = npc;
+                        logger.info("NPC Controller initialized for: " + npcName);
+                        break;
+                    }
+                }
+            } catch (Throwable ignore) { }
+        }
+    }
+
+    public void setCreativeMode(boolean creative) {
+        this.creativeMode = creative;
     }
     
     /**
@@ -64,10 +82,13 @@ public class NPCController {
     public void placeBlock(int x, int y, int z, Material material) {
         if (npcEntity == null) return;
         
-        // Check if NPC has the block
-        if (!npcInventory.hasItem(material)) {
-            logger.warning("[NPC] Don't have " + material + " to place");
-            return;
+        // In creative mode, allow placement without inventory
+        if (!creativeMode) {
+            // Check if NPC has the block
+            if (!npcInventory.hasItem(material)) {
+                logger.warning("[NPC] Don't have " + material + " to place");
+                return;
+            }
         }
         
         World world = npcEntity.getWorld();
@@ -76,7 +97,9 @@ public class NPCController {
         if (block.getType() == Material.AIR) {
             logger.info("[NPC] Placing block: " + material);
             block.setType(material);
-            npcInventory.removeItem(material);
+            if (!creativeMode) {
+                npcInventory.removeItem(material);
+            }
         }
     }
     
@@ -90,7 +113,15 @@ public class NPCController {
         this.currentGoal = target;
         logger.info("[NPC] Walking to: " + x + ", " + y + ", " + z);
         
-        // Simple pathfinding - walk in direction
+        // Prefer Citizens Navigator if available
+        try {
+            if (citizensNpc != null) {
+                citizensNpc.getNavigator().setTarget(target);
+                return;
+            }
+        } catch (Throwable ignore) { }
+        
+        // Fallback: simple velocity-based movement
         Location current = npcEntity.getLocation();
         Vector direction = target.toVector().subtract(current.toVector()).normalize();
         npcEntity.setVelocity(direction.multiply(0.5));
@@ -154,6 +185,17 @@ public class NPCController {
         actionQueue.add(action);
         logger.info("[NPC] Queued action: " + action.getType());
     }
+
+    public boolean hasQueuedMineAt(int x, int y, int z) {
+        for (NPCAction a : actionQueue) {
+            if (a instanceof NPCAction.MineBlock mine) {
+                if (mine.x == x && mine.y == y && mine.z == z) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     
     /**
      * Execute next queued action
@@ -163,7 +205,17 @@ public class NPCController {
         
         NPCAction action = actionQueue.poll();
         logger.info("[NPC] Executing: " + action.getType());
-        
+
+        // Telemetry hint when arriving to mine
+        try {
+            if (action instanceof NPCAction.MineBlock mine) {
+                com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                if (t != null) {
+                    t.send("ACTION:ARRIVED_AT " + mine.x + "," + mine.y + "," + mine.z + " MINING_NOW");
+                }
+            }
+        } catch (Exception ignore) { }
+
         // Execute based on action type
         action.execute(this);
     }
@@ -179,6 +231,20 @@ public class NPCController {
         
         // Execute queued actions
         if (!actionQueue.isEmpty()) {
+            // Gate mining actions until close to target to avoid premature execution
+            NPCAction next = actionQueue.peek();
+            if (next instanceof NPCAction.MineBlock mine) {
+                Location npcLoc = npcEntity.getLocation();
+                Location targetLoc = new Location(npcEntity.getWorld(), mine.x, mine.y, mine.z);
+                double distance = npcLoc.distance(targetLoc);
+
+                // Wait until near target before mining (helps uneven terrain/pathing)
+                if (distance > 4.0) {
+                    // Refresh navigation toward the target to avoid stalling
+                    walkTo(targetLoc.getX(), targetLoc.getY(), targetLoc.getZ());
+                    return;
+                }
+            }
             executeNextAction();
         }
     }
