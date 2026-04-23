@@ -4,6 +4,7 @@ import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 
@@ -28,6 +29,13 @@ public class GameActions {
         Location current = freddy.getEntity().getLocation();
         double groundY = getGroundLevel(new Location(current.getWorld(), x, 100, z));
         Location target = new Location(current.getWorld(), x, groundY, z);
+        freddy.getNavigator().setTarget(target);
+    }
+
+    public void walkTo(Location target) {
+        if (target == null) {
+            return;
+        }
         freddy.getNavigator().setTarget(target);
     }
     
@@ -57,7 +65,16 @@ public class GameActions {
     }
     
     public void turnTowards(Player player) {
-        Location target = player.getLocation();
+        if (player == null) {
+            return;
+        }
+        turnTowards(player.getLocation());
+    }
+
+    public void turnTowards(Location target) {
+        if (target == null) {
+            return;
+        }
         Location current = freddy.getEntity().getLocation();
         
         double dx = target.getX() - current.getX();
@@ -71,9 +88,19 @@ public class GameActions {
     // ===== INTERACTION ACTIONS =====
     
     public void interactBlock(Block block) {
-        // Punch/interact with block (doors, buttons, levers)
-        // NPC will visually move to the block
-        turnTowards(targetPlayer);
+        if (block == null) {
+            return;
+        }
+        walkTo(block.getLocation());
+        turnTowards(block.getLocation());
+    }
+
+    public void interactBlockAt(Location location) {
+        if (location == null) {
+            return;
+        }
+        walkTo(location);
+        turnTowards(location);
     }
     
     public void placeBlock(Material material) {
@@ -86,10 +113,30 @@ public class GameActions {
             front.getBlock().setType(material);
         }
     }
+
+    public void placeBlockAt(Location location, Material material) {
+        if (location == null || material == null) {
+            return;
+        }
+        Location target = location.getBlock().getLocation();
+        if (target.getBlock().getType() == Material.AIR) {
+            target.getBlock().setType(material);
+        }
+    }
     
     public void breakBlock(Block block) {
         // Break block
         block.breakNaturally();
+    }
+
+    public void breakBlockAt(Location location) {
+        if (location == null) {
+            return;
+        }
+        Block block = location.getBlock();
+        if (block.getType() != Material.AIR) {
+            breakBlock(block);
+        }
     }
     
     public void mineNearby() {
@@ -102,14 +149,40 @@ public class GameActions {
             breakBlock(front.getBlock());
         }
     }
+
+    public void mineTargetAt(Location location) {
+        if (location == null) {
+            return;
+        }
+        breakBlockAt(location);
+    }
     
     // ===== COMBAT ACTIONS =====
     
     public void attackNearby() {
-        if (targetPlayer != null && isInRange(targetPlayer, 3)) {
-            // NPC attacks by moving close to target
-            freddy.getNavigator().setTarget(targetPlayer, true);
+        Entity nearest = freddy.getEntity().getNearbyEntities(4, 4, 4).stream()
+            .filter(e -> e instanceof LivingEntity)
+            .findFirst()
+            .orElse(null);
+        if (nearest instanceof LivingEntity living) {
+            attackEntity(living);
         }
+    }
+
+    public void attackEntity(LivingEntity target) {
+        if (target == null) {
+            return;
+        }
+        // Delegate to NPCController for weapon-scaled damage if available
+        try {
+            var brainLoop = com.freddy.plugin.FreddyPlugin.getAIBrainLoop();
+            if (brainLoop != null && brainLoop.getNpcController() != null) {
+                brainLoop.getNpcController().attackEntity(target);
+                return;
+            }
+        } catch (Exception ignore) {}
+        // Fallback
+        target.damage(2, freddy.getEntity());
     }
     
     public void shield() {
@@ -122,6 +195,27 @@ public class GameActions {
         Location current = freddy.getEntity().getLocation();
         org.bukkit.util.Vector away = current.getDirection().multiply(-1);
         freddy.getEntity().setVelocity(away);
+    }
+
+    public void jumpBack() {
+        dodge();
+    }
+
+    public void lookAt(Location location) {
+        if (location == null) {
+            return;
+        }
+        Location current = freddy.getEntity().getLocation();
+        double dx = location.getX() - current.getX();
+        double dz = location.getZ() - current.getZ();
+        double yaw = Math.atan2(-dx, dz);
+        current.setYaw((float) Math.toDegrees(yaw));
+        freddy.getEntity().teleport(current);
+    }
+
+    public void observe() {
+        Location location = freddy.getEntity().getLocation().clone().add(freddy.getEntity().getLocation().getDirection().multiply(4));
+        turnTowards(location);
     }
     
     // ===== COMMUNICATION ACTIONS =====

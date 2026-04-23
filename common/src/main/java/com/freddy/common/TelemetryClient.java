@@ -13,6 +13,9 @@ public class TelemetryClient {
     private final String host;
     private final int port;
     private boolean connected = false;
+    private long lastReconnectAttempt = 0;
+    private long reconnectBackoffMs = 5000; // Start at 5 seconds
+    private static final long MAX_BACKOFF_MS = 60000; // Max 60 seconds
     
     public TelemetryClient(String host, int port) {
         this.host = host;
@@ -27,6 +30,7 @@ public class TelemetryClient {
             socket = new Socket(host, port);
             out = new PrintWriter(socket.getOutputStream(), true);
             connected = true;
+            reconnectBackoffMs = 5000; // Reset backoff on success
             System.out.println("[Telemetry] Connected to dashboard at " + host + ":" + port);
             return true;
         } catch (IOException e) {
@@ -39,9 +43,15 @@ public class TelemetryClient {
      * Send a message to the dashboard
      */
     public void send(String message) {
-        // Lazy reconnect if dashboard started after plugin
+        // Lazy reconnect with backoff to prevent socket spam
         if (!connected || out == null) {
+            long now = System.currentTimeMillis();
+            if (now - lastReconnectAttempt < reconnectBackoffMs) {
+                return; // Too soon to retry
+            }
+            lastReconnectAttempt = now;
             if (!connect()) {
+                reconnectBackoffMs = Math.min(reconnectBackoffMs * 2, MAX_BACKOFF_MS);
                 return;
             }
         }

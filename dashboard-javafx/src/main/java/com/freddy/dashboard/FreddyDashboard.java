@@ -9,27 +9,32 @@ import javafx.scene.Scene;
 import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.control.TextArea;
-import javafx.scene.control.TabPane;
 import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.ScrollPane.ScrollBarPolicy;
+import javafx.scene.control.TextField;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
-import javafx.scene.layout.TilePane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.RowConstraints;
 import javafx.scene.layout.StackPane;
+import javafx.scene.layout.TilePane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Stage;
+import javafx.collections.FXCollections;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -39,9 +44,14 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Base64;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
 import com.freddy.dashboard.graph.StepGraphVisualizer;
 
 /**
@@ -51,7 +61,7 @@ import com.freddy.dashboard.graph.StepGraphVisualizer;
 public class FreddyDashboard extends Application {
 
     private TextArea povTextArea;
-    private Label[] viewPanels = new Label[4];  // Four view panels: First-person, Third-person, Map, Timeline
+    private Label[] viewPanels = new Label[4];
     private TextArea neuralLogArea;
     private TextArea decisionArea;
     private Label latencyValue;
@@ -61,14 +71,43 @@ public class FreddyDashboard extends Application {
     private Label positionValue;
     private Label entitiesValue;
     private Label statusLabel;
-    private StepGraphVisualizer stepGraphVisualizer;  // Goal steps graph visualization
-    // Inventory UI refs
-    private GridPane inventoryGrid; // legacy, not used with TilePane but kept for structure
+    private StepGraphVisualizer stepGraphVisualizer;
+    private Canvas travelMapCanvas;
+    private GraphicsContext travelMapGc;
+    private final Deque<TravelPoint> travelTrail = new ArrayDeque<>();
+    private Label travelMapSummary;
+    private GridPane inventoryGrid;
     private TilePane inventoryTiles;
     private final java.util.List<Label> inventorySlots = new java.util.ArrayList<>();
+    private final Map<String, Image> inventoryIconCache = new HashMap<>();
     private Label inventoryItemCountLabel;
     private Label inventoryCapacityLabel;
     private Label inventoryWeightLabel;
+    private ComboBox<String> goalSelectorControl;
+    private ComboBox<String> actionSelectorControl;
+    private ComboBox<String> playerSelectorControl;
+    private ComboBox<String> itemSelectorControl;
+    private TextField amountFieldControl;
+    private ComboBox<String> goalBuildTemplateSelector;
+    private ComboBox<String> goalCraftItemSelector;
+    private TextField goalCraftAmountField;
+    private ComboBox<String> goalFightMobSelector;
+    private Label goalStatusControl;
+    private Label actionStatusControl;
+    private Label missionSnapshotLabel;
+    private final List<String> knownPlayers = new ArrayList<>();
+    private String currentGoal = "none";
+    private String currentAction = "none";
+    private String currentPosition = "unknown";
+    private String currentPlayers = "unknown";
+    private String currentMissionMode = "AI MISSION";
+    private String goalCatalogState = "unknown";
+    private String advancedFeaturesState = "unknown";
+    private String goalQueueState = "unknown";
+    private String workflowSafetyState = "unknown";
+    private String advancedWorldState = "unknown";
+    private long totalActions = 0;
+    private long completedSteps = 0;
 
     private final Label[] stateSymbols = new Label[4];
     private final Label[] stateLabels = new Label[4];
@@ -77,12 +116,11 @@ public class FreddyDashboard extends Application {
     private static final int DASHBOARD_PORT = 25566;
     private long tickCounter = 0;
     private long lastTickTime = System.currentTimeMillis();
-    private static final boolean TEST_MODE = false;  // Set to true to generate test frames
+    private static final boolean TEST_MODE = false;
 
-    // Frame rate tracking for each view panel
-    private final long[] panelFrameTimes = new long[4];      // Last frame time for each panel
-    private final int[] panelFrameCount = new int[4];        // Total frames received for each panel
-    private final double[] panelFPS = new double[4];         // Current FPS for each panel
+    private final long[] panelFrameTimes = new long[4];
+    private final int[] panelFrameCount = new int[4];
+    private final double[] panelFPS = new double[4];
 
     private static final String BG_PRIMARY = "#0a0e14";
     private static final String ACCENT_GREEN = "#2ea043";
@@ -111,11 +149,6 @@ public class FreddyDashboard extends Application {
         primaryStage.show();
 
         startTelemetryListener();
-        
-        // Force test frame immediately to verify rendering pipeline works
-        log("SYSTEM", "=== RENDERING TEST ===");
-        log("SYSTEM", "Attempting to render test frame to Panel 0");
-        testRenderPipeline();
 
         primaryStage.setOnCloseRequest(e -> {
             running = false;
@@ -169,7 +202,7 @@ public class FreddyDashboard extends Application {
         missionTab.setClosable(false);
         missionTab.setContent(createMainGrid());
         
-        Tab viewsTab = new Tab("◈ AI VIEWS");
+        Tab viewsTab = new Tab("◈ TRAVEL MAP");
         viewsTab.setClosable(false);
         viewsTab.setContent(createMultiViewPanel());
         
@@ -177,12 +210,16 @@ public class FreddyDashboard extends Application {
         inventoryTab.setClosable(false);
         inventoryTab.setContent(createInventoryPanel());
         
-        Tab goalsTab = new Tab("◈ GOALS & DIRECTIVES");
+        Tab goalsTab = new Tab("◈ GOALS & ACTIONS");
         goalsTab.setClosable(false);
         goalsTab.setContent(createGoalsPanel());
         
         tabPane.getTabs().addAll(missionTab, viewsTab, inventoryTab, goalsTab);
         return tabPane;
+    }
+
+    private VBox createActionsPanel() {
+        return createGoalsPanel();
     }
     
     private VBox createInventoryPanel() {
@@ -194,37 +231,57 @@ public class FreddyDashboard extends Application {
         title.setFont(Font.font("Consolas", FontWeight.BOLD, 18));
         title.setTextFill(Color.web(ACCENT_BLUE));
         
-        // Responsive inventory tiles: auto-wrap squares to fit available space
-        inventoryTiles = new TilePane();
-        inventoryTiles.setHgap(10);
-        inventoryTiles.setVgap(10);
-        inventoryTiles.setPadding(new Insets(15));
-        inventoryTiles.setPrefTileWidth(90);
-        inventoryTiles.setPrefTileHeight(90);
-        inventoryTiles.setStyle("-fx-background-color: #1c2128; -fx-border-color: " + ACCENT_BLUE + "; -fx-border-width: 1;");
+        // Fixed responsive grid: 9 columns x 4 rows (all 36 slots visible, no scroll)
+        inventoryGrid = new GridPane();
+        inventoryGrid.setHgap(10);
+        inventoryGrid.setVgap(10);
+        inventoryGrid.setPadding(new Insets(15));
+        inventoryGrid.setStyle("-fx-background-color: #1c2128; -fx-border-color: " + ACCENT_BLUE + "; -fx-border-width: 1;");
+
+        inventoryGrid.getColumnConstraints().clear();
+        for (int c = 0; c < 9; c++) {
+            ColumnConstraints col = new ColumnConstraints();
+            col.setPercentWidth(100.0 / 9.0);
+            col.setHgrow(Priority.ALWAYS);
+            inventoryGrid.getColumnConstraints().add(col);
+        }
+
+        inventoryGrid.getRowConstraints().clear();
+        for (int r = 0; r < 4; r++) {
+            RowConstraints row = new RowConstraints();
+            row.setPercentHeight(100.0 / 4.0);
+            row.setVgrow(Priority.ALWAYS);
+            inventoryGrid.getRowConstraints().add(row);
+        }
         
-        // Create inventory slots with responsive layout
+        // Create inventory slots
         inventorySlots.clear();
         for (int i = 0; i < 36; i++) {
             Label slot = new Label("[ ]");
-            slot.setPrefWidth(90);
-            slot.setPrefHeight(90);
+            slot.setPrefWidth(124);
+            slot.setPrefHeight(124);
+            slot.setMinWidth(80);
+            slot.setMinHeight(80);
+            slot.setMaxWidth(Double.MAX_VALUE);
+            slot.setMaxHeight(Double.MAX_VALUE);
+            slot.setWrapText(true);
+            slot.setContentDisplay(javafx.scene.control.ContentDisplay.TOP);
+            slot.setGraphicTextGap(10);
             slot.setStyle(
                 "-fx-background-color: #0f1419; " +
                 "-fx-border-color: #2b3d47; " +
                 "-fx-border-width: 1; " +
                 "-fx-text-fill: " + TEXT_SECONDARY + "; " +
                 "-fx-font-family: 'Consolas'; " +
-                "-fx-font-size: 12px; " +
+                "-fx-font-size: 13px; " +
                 "-fx-alignment: center;"
             );
-            inventoryTiles.getChildren().add(slot);
+            GridPane.setHgrow(slot, Priority.ALWAYS);
+            GridPane.setVgrow(slot, Priority.ALWAYS);
+            inventoryGrid.add(slot, i % 9, i / 9);
             inventorySlots.add(slot);
         }
-        
-        ScrollPane scrollPane = new ScrollPane(inventoryTiles);
-        scrollPane.setStyle("-fx-background-color: " + BG_PRIMARY + "; -fx-control-inner-background: " + BG_PRIMARY + ";");
-        VBox.setVgrow(scrollPane, Priority.ALWAYS);
+        VBox.setVgrow(inventoryGrid, Priority.ALWAYS);
         
         // Stats
         HBox statsBox = new HBox(20);
@@ -245,43 +302,91 @@ public class FreddyDashboard extends Application {
         
         statsBox.getChildren().addAll(inventoryItemCountLabel, inventoryCapacityLabel, inventoryWeightLabel);
         
-        inventoryPanel.getChildren().addAll(title, scrollPane, statsBox);
+        inventoryPanel.getChildren().addAll(title, inventoryGrid, statsBox);
         return inventoryPanel;
     }
     
     private VBox createGoalsPanel() {
+        VBox root = new VBox();
+        root.setStyle("-fx-background-color: " + BG_PRIMARY + ";");
+
+        ScrollPane scrollPane = new ScrollPane();
+        scrollPane.setFitToWidth(true);
+        scrollPane.setHbarPolicy(ScrollBarPolicy.NEVER);
+        scrollPane.setStyle("-fx-background: " + BG_PRIMARY + "; -fx-background-color: " + BG_PRIMARY + ";");
+
         VBox goalsPanel = new VBox(20);
         goalsPanel.setPadding(new Insets(20));
         goalsPanel.setStyle("-fx-background-color: " + BG_PRIMARY + ";");
         
-        Label title = new Label("◈ AI MISSION DIRECTIVES");
+        Label title = new Label("◈ UNIFIED AI MISSION SYSTEM");
         title.setFont(Font.font("Consolas", FontWeight.BOLD, 18));
         title.setTextFill(Color.web(ACCENT_GREEN));
         
-        Label description = new Label("Select a primary goal for Freddy to pursue autonomously:");
+        Label description = new Label("Choose a goal and execute it. The dashboard runs in a single AI mission mode.");
         description.setFont(Font.font("Consolas", 12));
         description.setTextFill(Color.web(TEXT_PRIMARY));
+
+        Label missionModeLabel = new Label("Mode: AI MISSION");
+        missionModeLabel.setFont(Font.font("Consolas", FontWeight.BOLD, 13));
+        missionModeLabel.setTextFill(Color.web(ACCENT_YELLOW));
         
-        ComboBox<String> goalSelector = new ComboBox<>();
-        goalSelector.setPromptText("Choose Goal...");
-        goalSelector.getItems().addAll(
+        goalSelectorControl = new ComboBox<>();
+        goalSelectorControl.setPromptText("Choose Goal...");
+        goalSelectorControl.getItems().addAll(
             "🎯 FOLLOW PLAYER",
             "💎 MINE DIAMONDS",
             "🌳 GATHER WOOD",
             "🪨 GATHER STONE",
-            "🌾 FARM CROPS",
             "⚔️ HUNT MOBS",
-            "🗺️ EXPLORE AREA",
-            "🏠 BUILD STRUCTURE"
+            "🤖 AUTOPILOT",
+            "🏠 BUILD STRUCTURE",
+            "↩️ RETURN TO PLAYER",
+            "🛡️ PROTECT PLAYER",
+            "🛠️ CRAFT ITEM",
+            "⚔️ FIGHT MOB",
+            "🚀 SPEEDRUN"
         );
-        goalSelector.setPrefWidth(400);
-        goalSelector.setStyle(
+        goalSelectorControl.setPrefWidth(400);
+        goalSelectorControl.setMaxWidth(Double.MAX_VALUE);
+        goalSelectorControl.setStyle(
             "-fx-background-color: #1c2128; " +
             "-fx-text-fill: " + TEXT_PRIMARY + "; " +
             "-fx-font-family: 'Consolas'; " +
             "-fx-font-size: 14px;"
         );
+
+        goalBuildTemplateSelector = new ComboBox<>();
+        goalBuildTemplateSelector.setPromptText("Select Structure Template...");
+        goalBuildTemplateSelector.getItems().addAll("HOUSE_6X6", "WALL_10", "HUT_4X4", "TOWER_7", "PILLAR_SMALL");
+        goalBuildTemplateSelector.setValue("HOUSE_6X6");
+        goalBuildTemplateSelector.setPrefWidth(240);
+
+        goalCraftItemSelector = new ComboBox<>();
+        goalCraftItemSelector.setPromptText("Select Item to Craft...");
+        goalCraftItemSelector.getItems().addAll(
+            "WOODEN_SWORD", "WOODEN_PICKAXE", "WOODEN_AXE", "WOODEN_SHOVEL",
+            "STONE_SWORD", "STONE_PICKAXE", "STONE_AXE", "STONE_SHOVEL", "CHEST",
+            "FURNACE", "CRAFTING_TABLE"
+            );
+        goalCraftItemSelector.setValue("WOODEN_SWORD");
+        goalCraftItemSelector.setPrefWidth(240);
+
+        goalCraftAmountField = new TextField("1");
+        goalCraftAmountField.setPromptText("Qty");
+        goalCraftAmountField.setPrefWidth(90);
+        goalCraftAmountField.setMinWidth(80);
+
+        goalFightMobSelector = new ComboBox<>();
+        goalFightMobSelector.setPromptText("Select Mob...");
+        goalFightMobSelector.getItems().addAll("ZOMBIE", "SKELETON", "SPIDER", "BREEZE", "IRON_GOLEM", "WITHER");
+        goalFightMobSelector.setValue("ZOMBIE");
+        goalFightMobSelector.setPrefWidth(180);
+
+        HBox goalOptionsRow = new HBox(10, goalBuildTemplateSelector, goalCraftItemSelector, goalCraftAmountField, goalFightMobSelector);
+        goalOptionsRow.setAlignment(Pos.CENTER_LEFT);
         
+
         Button activateButton = new Button("► ACTIVATE GOAL");
         activateButton.setFont(Font.font("Consolas", FontWeight.BOLD, 14));
         activateButton.setStyle(
@@ -290,9 +395,17 @@ public class FreddyDashboard extends Application {
             "-fx-padding: 10 20;"
         );
         
-        Label statusLabel = new Label("⚠️ GOAL SYSTEM: READY");
-        statusLabel.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
-        statusLabel.setTextFill(Color.web(ACCENT_YELLOW));
+        goalStatusControl = new Label("⚠️ GOAL SYSTEM: READY");
+        goalStatusControl.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
+        goalStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
+
+        Button clearGoalButton = new Button("✖ CLEAR GOAL");
+        clearGoalButton.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
+        clearGoalButton.setStyle(
+            "-fx-background-color: #da3633; " +
+            "-fx-text-fill: #e6edf3; " +
+            "-fx-padding: 8 12;"
+        );
         
         // Step visualization area
         VBox stepsContainer = new VBox(10);
@@ -305,23 +418,29 @@ public class FreddyDashboard extends Application {
             "-fx-background-radius: 5;"
         );
         
-        Label stepsTitle = new Label("📋 GOAL STEP GRAPH (Object Graph Visualizer Style)");
+        Label stepsTitle = new Label("📋 CONCRETE GOAL PLAN");
         stepsTitle.setFont(Font.font("Consolas", FontWeight.BOLD, 14));
         stepsTitle.setTextFill(Color.web(ACCENT_BLUE));
         
         // Graph visualizer with nodes and edges
         stepGraphVisualizer = new StepGraphVisualizer(800, 500);
         stepGraphVisualizer.setStyle("-fx-background-color: #0a0e14;");
+        stepGraphVisualizer.setMinHeight(320);
+        stepGraphVisualizer.setMaxWidth(Double.MAX_VALUE);
+        stepGraphVisualizer.prefWidthProperty().bind(stepsContainer.widthProperty().subtract(30));
         
         stepsContainer.getChildren().addAll(stepsTitle, stepGraphVisualizer);
         VBox.setVgrow(stepsContainer, Priority.ALWAYS);
         
         activateButton.setOnAction(e -> {
-            String selectedGoal = goalSelector.getValue();
+            String selectedGoal = goalSelectorControl.getValue();
             if (selectedGoal != null && !selectedGoal.isEmpty()) {
                 log("GOAL", "Button clicked: " + selectedGoal);
-                statusLabel.setText("✅ GOAL ACTIVATED: " + selectedGoal);
-                statusLabel.setTextFill(Color.web(ACCENT_GREEN));
+                goalStatusControl.setText("✅ GOAL ACTIVATED: " + selectedGoal);
+                goalStatusControl.setTextFill(Color.web(ACCENT_GREEN));
+                currentGoal = selectedGoal;
+                currentMissionMode = "AI MISSION";
+                updateMissionSnapshot();
                 
                 // Show loader while planning steps
                 if (stepGraphVisualizer != null) {
@@ -329,25 +448,194 @@ public class FreddyDashboard extends Application {
                 }
                 
                 // Send goal to plugin via command socket
-                sendGoalCommand(selectedGoal);
+                sendGoalCommand(buildGoalPayload(selectedGoal));
                 log("GOAL", "Command sent to plugin");
             } else {
                 log("WARN", "No goal selected!");
-                statusLabel.setText("⚠️ Please select a goal first");
-                statusLabel.setTextFill(Color.web(ACCENT_YELLOW));
+                goalStatusControl.setText("⚠️ Please select a goal first");
+                goalStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
             }
         });
+
+        clearGoalButton.setOnAction(e -> {
+            sendRawCommand("GOAL_CLEAR_FORCE");
+            currentGoal = "none";
+            updateMissionSnapshot();
+            goalStatusControl.setText("⚠️ GOAL CLEARED");
+            goalStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
+        });
+
+        HBox goalPromptRow = new HBox(10, clearGoalButton);
+        goalPromptRow.setAlignment(Pos.CENTER_LEFT);
+
+        actionSelectorControl = new ComboBox<>();
+        actionSelectorControl.setPromptText("Choose Action...");
+        actionSelectorControl.getItems().addAll(
+            "👁️ OBSERVE",
+            "🌪️ WANDER",
+            "🧘 IDLE",
+            "⬆️ JUMP",
+            "🧭 LOOK AT",
+            "🚶 MOVE TO",
+            "🏠 RETURN HOME",
+            "👣 FOLLOW PLAYER",
+            "🛡️ PROTECT PLAYER",
+            "🛠️ CRAFT ITEM",
+            "⛏️ MINE NEARBY",
+            "🔨 BREAK BLOCK",
+            "🧱 PLACE BLOCK",
+            "⚔️ ATTACK NEARBY",
+            "🛡️ SHIELD",
+            "↩️ DODGE",
+            "💬 CHAT",
+            "🙂 SAY HELLO",
+            "👋 SAY GOODBYE",
+            "❔ CONFUSED",
+            "🧺 PICKUP ITEMS"
+        );
+        actionSelectorControl.setPrefWidth(400);
+        actionSelectorControl.setMaxWidth(Double.MAX_VALUE);
+        actionSelectorControl.setStyle(
+            "-fx-background-color: #1c2128; " +
+            "-fx-text-fill: " + TEXT_PRIMARY + "; " +
+            "-fx-font-family: 'Consolas'; " +
+            "-fx-font-size: 14px;"
+        );
+
+
+        playerSelectorControl = new ComboBox<>();
+        playerSelectorControl.setPromptText("Select Player...");
+        playerSelectorControl.setPrefWidth(240);
+        playerSelectorControl.setMaxWidth(Double.MAX_VALUE);
+        playerSelectorControl.setItems(FXCollections.observableArrayList());
+
+        itemSelectorControl = new ComboBox<>();
+        itemSelectorControl.setPromptText("Select Item to Craft...");
+        itemSelectorControl.setPrefWidth(240);
+        itemSelectorControl.getItems().addAll(
+            "WOODEN_SWORD", "STONE_PICKAXE", "BREAD", "TORCH", "CHEST", "FURNACE",
+            "CRAFTING_TABLE", "OAK_PLANKS", "COBBLESTONE", "STONE", "OAK_LOG"
+        );
+
+        TextField targetField = new TextField();
+        targetField.setPromptText("Optional custom target override");
+        targetField.setPrefWidth(300);
+        targetField.setMaxWidth(Double.MAX_VALUE);
+
+        amountFieldControl = new TextField("1");
+        amountFieldControl.setPromptText("Amount");
+        amountFieldControl.setPrefWidth(100);
+        amountFieldControl.setMinWidth(90);
+        amountFieldControl.setMaxWidth(120);
+
+        Button executeActionButton = new Button("► EXECUTE ACTION");
+        executeActionButton.setFont(Font.font("Consolas", FontWeight.BOLD, 14));
+        executeActionButton.setStyle(
+            "-fx-background-color: " + ACCENT_BLUE + "; " +
+            "-fx-text-fill: #0a0e14; " +
+            "-fx-padding: 10 20;"
+        );
+
+        actionStatusControl = new Label("⚠️ ACTION SYSTEM: READY");
+        actionStatusControl.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
+        actionStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
+
+        executeActionButton.setOnAction(e -> {
+            String selectedAction = actionSelectorControl.getValue();
+            if (selectedAction == null || selectedAction.isEmpty()) {
+                actionStatusControl.setText("⚠️ Please select an action first");
+                actionStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
+                return;
+            }
+
+            String payload = toActionCommand(
+                selectedAction,
+                playerSelectorControl.getValue(),
+                itemSelectorControl.getValue(),
+                amountFieldControl.getText(),
+                targetField.getText()
+            );
+            if (payload == null) {
+                actionStatusControl.setText("⚠️ Required selection missing (player/item)");
+                actionStatusControl.setTextFill(Color.web(ACCENT_YELLOW));
+                return;
+            }
+
+            log("ACTION", "Sending: " + payload);
+            actionStatusControl.setText("✅ Sent: " + payload);
+            actionStatusControl.setTextFill(Color.web(ACCENT_GREEN));
+            currentAction = selectedAction;
+            currentMissionMode = "DIRECT ACTION";
+            updateMissionSnapshot();
+            sendActionCommand(payload);
+        });
+
+        HBox actionRow = new HBox(10, playerSelectorControl, itemSelectorControl, amountFieldControl, targetField, executeActionButton);
+        actionRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(targetField, Priority.ALWAYS);
+
+        VBox actionHints = new VBox(8,
+            new Label("Examples:"),
+            new Label("- OBSERVE / WANDER / RETURN HOME"),
+            new Label("- FOLLOW PLAYER + Steve"),
+            new Label("- PROTECT PLAYER + Steve"),
+            new Label("- CRAFT ITEM + WOODEN_SWORD + 1")
+        );
+        for (var node : actionHints.getChildren()) {
+            if (node instanceof Label label) {
+                label.setFont(Font.font("Consolas", 12));
+                label.setTextFill(Color.web(TEXT_SECONDARY));
+            }
+        }
         
         goalsPanel.getChildren().addAll(
             title, 
             description, 
-            goalSelector, 
+            missionModeLabel,
+            goalSelectorControl,
+            goalOptionsRow,
             activateButton, 
-            statusLabel, 
+            goalStatusControl,
+            goalPromptRow,
             stepsContainer
         );
-        
-        return goalsPanel;
+
+        goalSelectorControl.setOnAction(e -> {
+            String selected = goalSelectorControl.getValue() == null ? "" : goalSelectorControl.getValue().toUpperCase();
+            boolean buildGoal = selected.contains("BUILD STRUCTURE");
+            boolean craftGoal = selected.contains("CRAFT ITEM");
+            boolean fightGoal = selected.contains("FIGHT MOB");
+
+            goalBuildTemplateSelector.setManaged(buildGoal);
+            goalBuildTemplateSelector.setVisible(buildGoal);
+            goalCraftItemSelector.setManaged(craftGoal);
+            goalCraftItemSelector.setVisible(craftGoal);
+            goalCraftAmountField.setManaged(craftGoal);
+            goalCraftAmountField.setVisible(craftGoal);
+            goalFightMobSelector.setManaged(fightGoal);
+            goalFightMobSelector.setVisible(fightGoal);
+        });
+        goalSelectorControl.getOnAction().handle(null);
+
+        actionSelectorControl.setOnAction(e -> {
+            String selected = actionSelectorControl.getValue() == null ? "" : actionSelectorControl.getValue().toUpperCase();
+            boolean needsPlayer = selected.contains("FOLLOW PLAYER")
+                || selected.contains("PROTECT PLAYER")
+                || selected.contains("SAY HELLO")
+                || selected.contains("SAY GOODBYE")
+                || selected.contains("LOOK AT");
+            boolean needsItem = selected.contains("CRAFT ITEM") || selected.contains("PLACE BLOCK");
+
+            playerSelectorControl.setDisable(!needsPlayer);
+            itemSelectorControl.setDisable(!needsItem);
+            amountFieldControl.setDisable(!needsItem);
+        });
+        actionSelectorControl.getOnAction().handle(null);
+
+        scrollPane.setContent(goalsPanel);
+        VBox.setVgrow(scrollPane, Priority.ALWAYS);
+        root.getChildren().add(scrollPane);
+        return root;
     }
     
     /**
@@ -381,6 +669,273 @@ public class FreddyDashboard extends Application {
                 e.printStackTrace();
             }
         }, "GoalCommandSender").start();
+    }
+
+    private void sendRawCommand(String command) {
+        new Thread(() -> {
+            try {
+                Socket socket = new Socket("127.0.0.1", 25567);
+                java.io.PrintWriter out = new java.io.PrintWriter(socket.getOutputStream(), true);
+                log("CMD", "Sending command: " + command);
+                out.println(command);
+                out.flush();
+                out.close();
+                socket.close();
+            } catch (Exception e) {
+                log("ERROR", "Failed to send command: " + command + " - " + e.getMessage());
+            }
+        }, "RawCommandSender").start();
+    }
+
+    private void sendActionCommand(String command) {
+        new Thread(() -> {
+            try {
+                log("CMD", "Connecting to plugin command server at 127.0.0.1:25567...");
+                Socket socket = new Socket("127.0.0.1", 25567);
+                java.io.PrintWriter out = new java.io.PrintWriter(socket.getOutputStream(), true);
+
+                log("CMD", "Sending command: " + command);
+                out.println(command);
+                out.flush();
+
+                log("CMD", "✓ Action command sent successfully");
+
+                out.close();
+                socket.close();
+
+            } catch (java.net.ConnectException e) {
+                log("ERROR", "Cannot connect to plugin (port 25567): Is Minecraft server running with plugin?");
+            } catch (Exception e) {
+                log("ERROR", "Failed to send action command: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+        }, "ActionCommandSender").start();
+    }
+
+    private String toGoalToken(String uiGoal) {
+        if (uiGoal == null) {
+            return "EXPLORE_AREA";
+        }
+        String value = uiGoal.toUpperCase();
+        if (value.contains("FOLLOW PLAYER")) return "FOLLOW_PLAYER";
+        if (value.contains("MINE DIAMONDS")) return "MINE_DIAMONDS";
+        if (value.contains("GATHER WOOD")) return "GATHER_WOOD";
+        if (value.contains("GATHER STONE")) return "GATHER_STONE";
+        if (value.contains("HUNT MOBS")) return "HUNT_ANIMALS";
+        if (value.contains("BUILD STRUCTURE")) return "BUILD_STRUCTURE";
+        if (value.contains("AUTOPILOT")) return "AUTOPILOT";
+        if (value.contains("RETURN TO PLAYER")) return "RETURN_TO_PLAYER";
+        if (value.contains("PROTECT PLAYER")) return "PROTECT_PLAYER";
+        if (value.contains("CRAFT ITEM") || value.contains("CREATE ITEM")) return "CREATE_ITEM";
+        if (value.contains("FIGHT MOB")) return "FIGHT_MOB";
+        if (value.contains("SPEEDRUN")) return "SPEEDRUN";
+        return "EXPLORE_AREA";
+    }
+
+    private String buildGoalPayload(String uiGoal) {
+        String token = toGoalToken(uiGoal);
+        
+        int amount = 1;
+        try {
+            amount = Math.max(1, Integer.parseInt(goalCraftAmountField == null ? "1" : goalCraftAmountField.getText().trim()));
+        } catch (Exception ignore) {
+            amount = 1;
+        }
+
+        if ("BUILD_STRUCTURE".equalsIgnoreCase(token)) {
+            String template = goalBuildTemplateSelector == null ? "HOUSE_6X6" : goalBuildTemplateSelector.getValue();
+            if (template == null || template.isBlank()) {
+                template = "HOUSE_6X6";
+            }
+            return "BUILD_STRUCTURE:" + template.trim().toUpperCase();
+        }
+
+        if ("CREATE_ITEM".equalsIgnoreCase(token)) {
+            String item = goalCraftItemSelector == null ? "WOODEN_SWORD" : goalCraftItemSelector.getValue();
+            if (item == null || item.isBlank()) {
+                item = "WOODEN_SWORD";
+            }
+            return "CREATE_ITEM:" + item.trim().toUpperCase() + ":" + amount;
+        }
+
+        if ("FIGHT_MOB".equalsIgnoreCase(token)) {
+            String mob = goalFightMobSelector == null ? "ZOMBIE" : goalFightMobSelector.getValue();
+            if (mob == null || mob.isBlank()) {
+                mob = "ZOMBIE";
+            }
+            return "FIGHT_MOB:" + mob.trim().toUpperCase();
+        }
+
+        // Add amount parameters to gather goals
+        if (List.of("GATHER_WOOD", "GATHER_STONE", "MINE_DIAMONDS", "HUNT_ANIMALS").contains(token)) {
+            return token + ":" + amount;
+        }
+
+        return token;
+    }
+
+    private String toActionCommand(String uiAction, String selectedPlayer, String selectedItem, String amountRaw, String customTarget) {
+        if (uiAction == null) {
+            return null;
+        }
+
+        String normalized = uiAction.toUpperCase();
+        String override = customTarget == null ? "" : customTarget.trim();
+        String player = (override.isEmpty() ? selectedPlayer : override);
+
+        if (normalized.contains("OBSERVE")) {
+            return "OBSERVE";
+        }
+        if (normalized.contains("WANDER")) {
+            return "ACTION:WANDER";
+        }
+        if (normalized.contains("IDLE")) {
+            return "ACTION:IDLE";
+        }
+        if (normalized.contains("JUMP")) {
+            return "ACTION:JUMP";
+        }
+        if (normalized.contains("LOOK AT")) {
+            if (player != null && !player.isBlank()) {
+                return "ACTION:LOOK_AT:" + player.trim();
+            }
+            return override.isEmpty() ? "ACTION:LOOK_AT" : "ACTION:LOOK_AT:" + override;
+        }
+        if (normalized.contains("MOVE TO")) {
+            if (override.isEmpty()) {
+                return null;
+            }
+            return "ACTION:MOVE_TO:" + override;
+        }
+        if (normalized.contains("RETURN HOME")) {
+            return "RETURN_HOME";
+        }
+        if (normalized.contains("FOLLOW PLAYER")) {
+            if (player == null || player.isBlank()) {
+                return null;
+            }
+            return "ACTION:FOLLOW:" + player.trim();
+        }
+        if (normalized.contains("PROTECT PLAYER")) {
+            if (player == null || player.isBlank()) {
+                return null;
+            }
+            return "ACTION:PROTECT:" + player.trim();
+        }
+        if (normalized.contains("MINE NEARBY")) {
+            return "ACTION:MINE_NEARBY";
+        }
+        if (normalized.contains("BREAK BLOCK")) {
+            return override.isEmpty() ? "ACTION:BREAK_BLOCK" : "ACTION:BREAK_BLOCK:" + override;
+        }
+        if (normalized.contains("PLACE BLOCK")) {
+            if (selectedItem != null && !selectedItem.isBlank()) {
+                return override.isEmpty() ? "ACTION:PLACE_BLOCK:" + selectedItem.trim() : "ACTION:PLACE_BLOCK:" + selectedItem.trim() + ":" + override;
+            }
+            return null;
+        }
+        if (normalized.contains("ATTACK NEARBY")) {
+            return "ACTION:ATTACK_NEARBY";
+        }
+        if (normalized.contains("SHIELD")) {
+            return "ACTION:SHIELD";
+        }
+        if (normalized.contains("DODGE")) {
+            return "ACTION:DODGE";
+        }
+        if (normalized.contains("CHAT")) {
+            return override.isEmpty() ? "ACTION:CHAT:Hello!" : "ACTION:CHAT:" + override;
+        }
+        if (normalized.contains("SAY HELLO")) {
+            if (player == null || player.isBlank()) {
+                return null;
+            }
+            return "ACTION:SAY_HELLO:" + player.trim();
+        }
+        if (normalized.contains("SAY GOODBYE")) {
+            if (player == null || player.isBlank()) {
+                return null;
+            }
+            return "ACTION:SAY_GOODBYE:" + player.trim();
+        }
+        if (normalized.contains("CONFUSED")) {
+            return "ACTION:CONFUSED";
+        }
+        if (normalized.contains("PICKUP ITEMS")) {
+            return "ACTION:PICKUP_ITEMS";
+        }
+        if (normalized.contains("CRAFT ITEM")) {
+            String item = (override.isEmpty() ? selectedItem : override);
+            if (item == null || item.isBlank()) {
+                return null;
+            }
+            int amount = 1;
+            try {
+                amount = Math.max(1, Integer.parseInt(amountRaw == null ? "1" : amountRaw.trim()));
+            } catch (NumberFormatException ignore) {
+                amount = 1;
+            }
+            return "CRAFT:" + item.trim() + ":" + amount;
+        }
+
+        return null;
+    }
+
+    private void updatePlayerSelector(String playersRaw) {
+        List<String> parsed = parsePlayerList(playersRaw);
+        knownPlayers.clear();
+        knownPlayers.addAll(parsed);
+
+        if (playerSelectorControl != null) {
+            String selected = playerSelectorControl.getValue();
+            playerSelectorControl.setItems(FXCollections.observableArrayList(parsed));
+            if (selected != null && parsed.contains(selected)) {
+                playerSelectorControl.setValue(selected);
+            } else if (!parsed.isEmpty()) {
+                playerSelectorControl.setValue(parsed.get(0));
+            }
+        }
+    }
+
+    private List<String> parsePlayerList(String playersRaw) {
+        List<String> parsed = new ArrayList<>();
+        if (playersRaw == null || playersRaw.isBlank()) {
+            return parsed;
+        }
+
+        String normalized = playersRaw.replace("[", "").replace("]", "").trim();
+        if (normalized.isEmpty() || normalized.equalsIgnoreCase("none") || normalized.equalsIgnoreCase("unknown")) {
+            return parsed;
+        }
+
+        String[] tokens = normalized.split(",");
+        for (String token : tokens) {
+            String player = token.trim();
+            if (!player.isEmpty()) {
+                parsed.add(player);
+            }
+        }
+        return parsed;
+    }
+
+    private void updateMissionSnapshot() {
+        if (missionSnapshotLabel == null) {
+            return;
+        }
+
+        missionSnapshotLabel.setText(
+            "Status: live telemetry connected\n" +
+            "Mode: " + currentMissionMode + "\n" +
+            "Current goal: " + currentGoal + "\n" +
+            "Last action: " + currentAction + "\n" +
+            "Position: " + currentPosition + "\n" +
+            "Players: " + currentPlayers + "\n" +
+            "Goal queue: " + goalQueueState + "\n" +
+            "Workflow safety: " + workflowSafetyState + "\n" +
+            "Advanced state: " + advancedWorldState + "\n" +
+            "Available goals: " + goalCatalogState + "\n" +
+            "Advanced features: " + advancedFeaturesState + "\n\n" +
+            "GOALS tab runs mission-driven AI with peer advanced features."
+        );
     }
 
     private GridPane createMainGrid() {
@@ -527,80 +1082,9 @@ public class FreddyDashboard extends Application {
                     updatePOVDisplay(povData);
                     updateState(0);
 
-                } else if (message.startsWith("VIDEO_FP:")) {
-                    // First-person view (primary NPC POV)
-                    String payload = message.substring(9).trim();
-                    String npcName = null;
-                    String base64Data = payload;
-                    int sep = payload.indexOf(":");
-                    if (sep > 0) {
-                        npcName = payload.substring(0, sep).trim();
-                        base64Data = payload.substring(sep + 1).trim();
-                    }
-                    if (npcName != null && !npcName.isEmpty()) {
-                        log("VIDEO_FP", "Frame from NPC '" + npcName + "' (" + base64Data.length() + " chars)");
-                    } else {
-                        log("VIDEO_FP", "First-person frame received (" + base64Data.length() + " chars)");
-                    }
-                    updateViewFrame(0, base64Data);  // Panel 0: First-person
-                    log("VIDEO_FP", "Frame update called");
-
-                } else if (message.startsWith("VIDEO_3P:")) {
-                    // Third-person view
-                    String payload = message.substring(9).trim();
-                    String npcName = null;
-                    String base64Data = payload;
-                    int sep = payload.indexOf(":");
-                    if (sep > 0) {
-                        npcName = payload.substring(0, sep).trim();
-                        base64Data = payload.substring(sep + 1).trim();
-                    }
-                    if (npcName != null && !npcName.isEmpty()) {
-                        log("VIDEO_3P", "Frame from NPC '" + npcName + "' (" + base64Data.length() + " chars)");
-                    } else {
-                        log("VIDEO_3P", "Third-person frame received (" + base64Data.length() + " chars)");
-                    }
-                    updateViewFrame(1, base64Data);  // Panel 1: Third-person
-                    
-                } else if (message.startsWith("VIDEO_MAP:")) {
-                    // Map view
-                    String payload = message.substring(10).trim();
-                    String npcName = null;
-                    String base64Data = payload;
-                    int sep = payload.indexOf(":");
-                    if (sep > 0) {
-                        npcName = payload.substring(0, sep).trim();
-                        base64Data = payload.substring(sep + 1).trim();
-                    }
-                    if (npcName != null && !npcName.isEmpty()) {
-                        log("VIDEO_MAP", "Frame from NPC '" + npcName + "' (" + base64Data.length() + " chars)");
-                    } else {
-                        log("VIDEO_MAP", "Map frame received (" + base64Data.length() + " chars)");
-                    }
-                    updateViewFrame(2, base64Data);  // Panel 2: Map view
-                    
-                } else if (message.startsWith("VIDEO_REPLAY:")) {
-                    // Timeline replay - DO NOT SHOW VIDEO STREAMS
-                    // Just log but don't update the panel
-                    String payload = message.substring(13).trim();
-                    String npcName = null;
-                    int sep = payload.indexOf(":");
-                    if (sep > 0) {
-                        npcName = payload.substring(0, sep).trim();
-                    }
-                    if (npcName != null && !npcName.isEmpty()) {
-                        log("VIDEO_REPLAY", "Frame from NPC '" + npcName + "' (ignored - timeline view disabled)");
-                    } else {
-                        log("VIDEO_REPLAY", "Timeline frame received (ignored - timeline view disabled)");
-                    }
-                    // Don't call updateViewFrame(3, base64Data) - user doesn't want video in timeline
-
-                } else if (message.startsWith("VIDEO:")) {
-                    // Legacy: treat as first-person
-                    String base64Data = message.substring(6).trim();
-                    log("VIDEO", "Legacy frame received (" + base64Data.length() + " chars Base64)");
-                    updateViewFrame(0, base64Data);
-                    log("VIDEO", "Frame update called");
+                } else if (message.startsWith("VIDEO")) {
+                    // Video feeds are intentionally disabled in dashboard UI.
+                    log("VIDEO", "Video stream packet ignored (travel map mode)");
 
                 } else if (message.startsWith("OBSERVATION:")) {
                     String obs = message.substring(12).trim();
@@ -610,10 +1094,16 @@ public class FreddyDashboard extends Application {
                 } else if (message.startsWith("POSITION:")) {
                     String pos = message.substring(9).trim();
                     positionValue.setText(pos);
+                    currentPosition = pos;
+                    updateMissionSnapshot();
+                    updateTravelMap(pos);
 
                 } else if (message.startsWith("PLAYERS:")) {
                     String players = message.substring(8).trim();
                     entitiesValue.setText(players);
+                    currentPlayers = players;
+                    updatePlayerSelector(players);
+                    updateMissionSnapshot();
 
                 } else if (message.startsWith("THINKING:")) {
                     String thinking = message.substring(9).trim();
@@ -635,7 +1125,40 @@ public class FreddyDashboard extends Application {
                     String action = message.substring(7).trim();
                     log("EXECUTE", action);
                     updateDecisionMatrix("EXECUTION", action);
+                    currentAction = action;
+                    totalActions++;
+                    if (successValue != null) {
+                        double rate = totalActions == 0 ? 0.0 : (completedSteps * 100.0 / totalActions);
+                        successValue.setText(String.format("%.0f%%", Math.max(0.0, Math.min(100.0, rate))));
+                    }
+                    updateMissionSnapshot();
                     updateState(3);
+
+                } else if (message.startsWith("GOAL:")) {
+                    String goal = message.substring(5).trim();
+                    log("GOAL", goal);
+                    currentGoal = goal;
+                    updateMissionSnapshot();
+
+                } else if (message.startsWith("GOAL_CATALOG:")) {
+                    goalCatalogState = message.substring(13).trim();
+                    updateMissionSnapshot();
+
+                } else if (message.startsWith("ADV_FEATURES:")) {
+                    advancedFeaturesState = message.substring(13).trim();
+                    updateMissionSnapshot();
+
+                } else if (message.startsWith("GOAL_QUEUE:")) {
+                    goalQueueState = message.substring(11).trim();
+                    updateMissionSnapshot();
+
+                } else if (message.startsWith("WORKFLOW_SAFETY:")) {
+                    workflowSafetyState = message.substring(16).trim();
+                    updateMissionSnapshot();
+
+                } else if (message.startsWith("ADV_STATE:")) {
+                    advancedWorldState = message.substring(10).trim();
+                    updateMissionSnapshot();
 
                 } else if (message.startsWith("CHAT:")) {
                     String chat = message.substring(5).trim();
@@ -652,6 +1175,13 @@ public class FreddyDashboard extends Application {
                     String status = extractJsonValue(payload, "status");
                     if (id != null && !id.isEmpty() && status != null && !status.isEmpty()) {
                         log("STEP_UPDATE", id + " -> " + status);
+                        if ("COMPLETED".equalsIgnoreCase(status)) {
+                            completedSteps++;
+                            if (successValue != null) {
+                                double rate = totalActions == 0 ? 100.0 : (completedSteps * 100.0 / totalActions);
+                                successValue.setText(String.format("%.0f%%", Math.max(0.0, Math.min(100.0, rate))));
+                            }
+                        }
                         if (stepGraphVisualizer != null) {
                             stepGraphVisualizer.updateStepStatus(id, status);
                         }
@@ -680,17 +1210,25 @@ public class FreddyDashboard extends Application {
         try {
             String[] parts = payload.isEmpty() ? new String[0] : payload.split(",");
             // Clear slots
-            for (Label slot : inventorySlots) slot.setText("[ ]");
+            for (Label slot : inventorySlots) {
+                slot.setText("[ ]");
+                slot.setGraphic(null);
+            }
             int totalItems = 0;
             int slotIndex = 0;
             for (String part : parts) {
                 String[] kv = part.split("=");
                 if (kv.length == 2) {
-                    String mat = kv[0];
+                    String mat = kv[0].trim();
                     int count = Integer.parseInt(kv[1]);
                     totalItems += count;
                     if (slotIndex < inventorySlots.size()) {
-                        inventorySlots.get(slotIndex).setText("[ " + mat + "  x" + count + " ]");
+                        Label slot = inventorySlots.get(slotIndex);
+                        slot.setText(mat + "\nx" + count);
+                        ImageView icon = createItemIconView(mat);
+                        if (icon != null) {
+                            slot.setGraphic(icon);
+                        }
                         slotIndex++;
                     }
                 }
@@ -701,6 +1239,56 @@ public class FreddyDashboard extends Application {
         } catch (Exception e) {
             log("ERROR", "Inventory parse error: " + e.getMessage());
         }
+    }
+
+    private ImageView createItemIconView(String material) {
+        String key = normalizeMaterialKey(material);
+        Image image = inventoryIconCache.get(key);
+        if (image == null) {
+            image = loadInventoryIcon(key);
+            if (image != null) {
+                inventoryIconCache.put(key, image);
+            }
+        }
+
+        if (image == null) {
+            return null;
+        }
+
+        ImageView icon = new ImageView(image);
+        icon.setFitWidth(44);
+        icon.setFitHeight(44);
+        icon.setPreserveRatio(true);
+        icon.setSmooth(false);
+        return icon;
+    }
+
+    private String normalizeMaterialKey(String material) {
+        String key = material == null ? "" : material.trim().toLowerCase();
+        if (key.startsWith("minecraft:")) {
+            key = key.substring("minecraft:".length());
+        }
+        return key;
+    }
+
+    private Image loadInventoryIcon(String materialKey) {
+        if (materialKey.isEmpty()) {
+            return null;
+        }
+
+        String itemUrl = "https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.20.4/assets/minecraft/textures/item/" + materialKey + ".png";
+        Image itemImage = new Image(itemUrl, true);
+        if (!itemImage.isError()) {
+            return itemImage;
+        }
+
+        String blockUrl = "https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/1.20.4/assets/minecraft/textures/block/" + materialKey + ".png";
+        Image blockImage = new Image(blockUrl, true);
+        if (!blockImage.isError()) {
+            return blockImage;
+        }
+
+        return null;
     }
 
     private void updatePOVDisplay(String rawPOV) {
@@ -753,87 +1341,93 @@ public class FreddyDashboard extends Application {
     }
 
     /**
-     * Create multi-perspective view panel with 2-panel layout
-     * LEFT: First-person POV (primary video streaming)
-     * RIGHT: Timeline replay view
+     * Create travel map panel showing Freddy's recent movement trail.
      */
     private VBox createMultiViewPanel() {
         VBox container = new VBox(10);
         container.setPadding(new Insets(15));
         container.setStyle("-fx-background-color: " + BG_PRIMARY + ";");
 
-        Label title = new Label("◈ AI VIDEO STREAM (Left: First-Person POV | Right: Timeline)");
+        Label title = new Label("◈ TRAVEL MAP (Recent Coordinates + Mission Snapshot)");
         title.setFont(Font.font("Consolas", FontWeight.BOLD, 16));
         title.setTextFill(Color.web(ACCENT_GREEN));
 
         HBox mainContent = new HBox(15);
-        
-        // LEFT PANEL: First-person POV (MAIN VIDEO)
+        mainContent.setFillHeight(true);
+
         VBox leftPanel = new VBox(10);
+        leftPanel.setMinWidth(360);
+        leftPanel.setPrefWidth(980);
         leftPanel.setStyle(
             "-fx-border-color: " + ACCENT_GREEN + "; " +
             "-fx-border-width: 2; " +
             "-fx-background-color: #0f1419; " +
             "-fx-padding: 15"
         );
-        
-        Label leftTitle = new Label("👁️ FIRST-PERSON POV (NPC Decision Analysis)");
+
+        Label leftTitle = new Label("🗺️ MOVEMENT TRAIL");
         leftTitle.setFont(Font.font("Consolas", FontWeight.BOLD, 14));
         leftTitle.setTextFill(Color.web(ACCENT_GREEN));
-        
-        // Video panel for first-person view
-        viewPanels[0] = new Label();
-        viewPanels[0].setStyle(
-            "-fx-background-color: #1a1f26; " +
-            "-fx-text-fill: " + TEXT_SECONDARY + "; " +
-            "-fx-font-size: 11px; " +
-            "-fx-font-family: 'Consolas';"
-        );
-        viewPanels[0].setMaxWidth(Double.MAX_VALUE);
-        viewPanels[0].setMaxHeight(Double.MAX_VALUE);
-        viewPanels[0].setAlignment(Pos.CENTER);
-        viewPanels[0].setText("\n\n[WAITING FOR VIDEO STREAM...]\n\nStreaming first-person view\nfrom AI entity perspective\n\n");
-        viewPanels[0].setWrapText(true);
-        
-        VBox.setVgrow(viewPanels[0], Priority.ALWAYS);
-        leftPanel.getChildren().addAll(leftTitle, viewPanels[0]);
+
+        travelMapCanvas = new Canvas(640, 420);
+        leftPanel.widthProperty().addListener((obs, oldVal, newVal) -> {
+            double nextWidth = Math.max(320, newVal.doubleValue() - 30);
+            travelMapCanvas.setWidth(nextWidth);
+            drawTravelMap();
+        });
+        leftPanel.heightProperty().addListener((obs, oldVal, newVal) -> {
+            double nextHeight = Math.max(220, newVal.doubleValue() - 110);
+            travelMapCanvas.setHeight(nextHeight);
+            drawTravelMap();
+        });
+        travelMapGc = travelMapCanvas.getGraphicsContext2D();
+        travelMapGc.setFont(Font.font("Consolas", FontWeight.BOLD, 12));
+
+        travelMapSummary = new Label("Waiting for POSITION telemetry...");
+        travelMapSummary.setWrapText(true);
+        travelMapSummary.setFont(Font.font("Consolas", 12));
+        travelMapSummary.setTextFill(Color.web(TEXT_SECONDARY));
+
+        leftPanel.getChildren().addAll(leftTitle, travelMapCanvas, travelMapSummary);
+        VBox.setVgrow(travelMapCanvas, Priority.ALWAYS);
         HBox.setHgrow(leftPanel, Priority.ALWAYS);
-        
-        // RIGHT PANEL: Timeline replay
+
         VBox rightPanel = new VBox(10);
+        rightPanel.setMinWidth(280);
+        rightPanel.setPrefWidth(420);
         rightPanel.setStyle(
             "-fx-border-color: " + ACCENT_BLUE + "; " +
             "-fx-border-width: 2; " +
             "-fx-background-color: #0f1419; " +
             "-fx-padding: 15"
         );
-        
-        Label rightTitle = new Label("⏱️ TIMELINE REPLAY VIEW");
+
+        Label rightTitle = new Label("🧭 LIVE MISSION SNAPSHOT");
         rightTitle.setFont(Font.font("Consolas", FontWeight.BOLD, 14));
         rightTitle.setTextFill(Color.web(ACCENT_BLUE));
-        
-        // Video panel for timeline view
-        viewPanels[3] = new Label();
-        viewPanels[3].setStyle(
+
+        missionSnapshotLabel = new Label();
+        missionSnapshotLabel.setStyle(
             "-fx-background-color: #1a1f26; " +
             "-fx-text-fill: " + TEXT_SECONDARY + "; " +
-            "-fx-font-size: 11px; " +
-            "-fx-font-family: 'Consolas';"
+            "-fx-font-size: 12px; " +
+            "-fx-font-family: 'Consolas'; " +
+            "-fx-padding: 18;"
         );
-        viewPanels[3].setMaxWidth(Double.MAX_VALUE);
-        viewPanels[3].setMaxHeight(Double.MAX_VALUE);
-        viewPanels[3].setAlignment(Pos.CENTER);
-        viewPanels[3].setText("\n\n[WAITING FOR TIMELINE DATA...]\n\nHistorical playback\nof recorded actions\n\n");
-        viewPanels[3].setWrapText(true);
-        
-        VBox.setVgrow(viewPanels[3], Priority.ALWAYS);
-        rightPanel.getChildren().addAll(rightTitle, viewPanels[3]);
+        missionSnapshotLabel.setMaxWidth(Double.MAX_VALUE);
+        missionSnapshotLabel.setMaxHeight(Double.MAX_VALUE);
+        missionSnapshotLabel.setAlignment(Pos.TOP_LEFT);
+        missionSnapshotLabel.setWrapText(true);
+        updateMissionSnapshot();
+
+        VBox.setVgrow(missionSnapshotLabel, Priority.ALWAYS);
+        rightPanel.getChildren().addAll(rightTitle, missionSnapshotLabel);
         HBox.setHgrow(rightPanel, Priority.ALWAYS);
-        
-        // Initialize unused panels (3P, MAP) to avoid NullPointerException
-        viewPanels[1] = new Label("[Third-Person - Not displayed]");
-        viewPanels[2] = new Label("[Map View - Not displayed]");
-        
+
+        viewPanels[1] = new Label("[Not used]");
+        viewPanels[2] = new Label("[Not used]");
+        viewPanels[3] = missionSnapshotLabel;
+
         mainContent.getChildren().addAll(leftPanel, rightPanel);
         VBox.setVgrow(mainContent, Priority.ALWAYS);
         container.getChildren().addAll(title, mainContent);
@@ -895,6 +1489,9 @@ public class FreddyDashboard extends Application {
     }
 
     private void log(String category, String message) {
+        if (neuralLogArea == null) {
+            return;
+        }
         Platform.runLater(() -> {
             String timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
             String formatted = String.format("[%s] %s >> %s\n", timestamp, category, message);
@@ -919,6 +1516,9 @@ public class FreddyDashboard extends Application {
      * Also tracks and displays frame rate (FPS) for each view
      */
     private void updateViewFrame(int panelIndex, String base64Data) {
+        if (panelIndex < 0 || panelIndex >= viewPanels.length) {
+            return;
+        }
         log("TRACE", "updateViewFrame called: panel=" + panelIndex + ", dataLen=" + (base64Data != null ? base64Data.length() : 0));
         
         Platform.runLater(() -> {
@@ -1035,6 +1635,118 @@ public class FreddyDashboard extends Application {
         updateViewFrame(0, base64Data);
     }
 
+    private void updateTravelMap(String pos) {
+        Platform.runLater(() -> {
+            try {
+                String[] parts = pos.split(",");
+                if (parts.length < 3) {
+                    return;
+                }
+
+                double x = Double.parseDouble(parts[0].trim());
+                double y = Double.parseDouble(parts[1].trim());
+                double z = Double.parseDouble(parts[2].trim());
+
+                travelTrail.addLast(new TravelPoint(x, y, z));
+                while (travelTrail.size() > 180) {
+                    travelTrail.removeFirst();
+                }
+
+                drawTravelMap();
+            } catch (Exception e) {
+                log("ERROR", "Travel map update failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private void drawTravelMap() {
+        if (travelMapGc == null || travelMapCanvas == null) {
+            return;
+        }
+
+        double width = travelMapCanvas.getWidth();
+        double height = travelMapCanvas.getHeight();
+
+        travelMapGc.setFill(Color.web("#0a0e14"));
+        travelMapGc.fillRect(0, 0, width, height);
+
+        travelMapGc.setStroke(Color.web("#1c2128"));
+        for (int x = 0; x < width; x += 50) {
+            travelMapGc.strokeLine(x, 0, x, height);
+        }
+        for (int y = 0; y < height; y += 50) {
+            travelMapGc.strokeLine(0, y, width, y);
+        }
+
+        if (travelTrail.isEmpty()) {
+            travelMapGc.setFill(Color.web(TEXT_SECONDARY));
+            travelMapGc.fillText("Waiting for Freddy position updates...", 30, 40);
+            if (travelMapSummary != null) {
+                travelMapSummary.setText("Waiting for POSITION telemetry...");
+            }
+            return;
+        }
+
+        List<TravelPoint> points = new ArrayList<>(travelTrail);
+        double minX = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double minZ = Double.MAX_VALUE;
+        double maxZ = -Double.MAX_VALUE;
+
+        for (TravelPoint point : points) {
+            minX = Math.min(minX, point.x);
+            maxX = Math.max(maxX, point.x);
+            minZ = Math.min(minZ, point.z);
+            maxZ = Math.max(maxZ, point.z);
+        }
+
+        double rangeX = Math.max(1.0, maxX - minX);
+        double rangeZ = Math.max(1.0, maxZ - minZ);
+        double scale = Math.min((width - 80) / rangeX, (height - 80) / rangeZ);
+
+        for (int i = 0; i < points.size(); i++) {
+            TravelPoint point = points.get(i);
+            double px = 40 + (point.x - minX) * scale;
+            double py = 40 + (point.z - minZ) * scale;
+
+            if (i > 0) {
+                TravelPoint prev = points.get(i - 1);
+                double prevX = 40 + (prev.x - minX) * scale;
+                double prevY = 40 + (prev.z - minZ) * scale;
+                travelMapGc.setStroke(Color.web("#2ea043"));
+                travelMapGc.strokeLine(prevX, prevY, px, py);
+            }
+
+            boolean isLast = i == points.size() - 1;
+            travelMapGc.setFill(isLast ? Color.web("#1f6feb") : Color.web("#58a6ff"));
+            travelMapGc.fillOval(px - (isLast ? 5 : 3), py - (isLast ? 5 : 3), isLast ? 10 : 6, isLast ? 10 : 6);
+        }
+
+        TravelPoint last = points.get(points.size() - 1);
+        travelMapGc.setFill(Color.web(TEXT_PRIMARY));
+        travelMapGc.fillText(String.format("Last: X=%.1f, Y=%.1f, Z=%.1f", last.x, last.y, last.z), 24, 24);
+        travelMapGc.fillText(String.format("Trail points: %d", points.size()), 24, 42);
+
+        if (travelMapSummary != null) {
+            travelMapSummary.setText(String.format(
+                "Trail points: %d | Last position: X=%.1f, Y=%.1f, Z=%.1f | Bounds: X[%.1f..%.1f], Z[%.1f..%.1f]",
+                points.size(), last.x, last.y, last.z, minX, maxX, minZ, maxZ
+            ));
+        }
+    }
+
+    private static class TravelPoint {
+        final double x;
+        final double y;
+        final double z;
+
+        TravelPoint(double x, double y, double z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
     /**
      * Test rendering pipeline - creates a simple colored image and renders it to Panel 0
      */
@@ -1138,20 +1850,20 @@ public class FreddyDashboard extends Application {
         
         try {
             String trimmed = stepsJson.trim();
-            if (trimmed.startsWith("[")) trimmed = trimmed.substring(1);
-            if (trimmed.endsWith("]")) trimmed = trimmed.substring(0, trimmed.length() - 1);
-            
-            String[] steps = trimmed.split("\\},\\{");
-            
-            for (String step : steps) {
-                step = step.replace("{", "").replace("}", "");
-                
+            if (trimmed.isEmpty() || trimmed.equals("[]")) {
+                return stepDataList;
+            }
+
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\{[^\\{\\}]*\\}").matcher(trimmed);
+            while (matcher.find()) {
+                String step = matcher.group();
                 String id = extractJsonValue(step, "id");
                 String label = extractJsonValue(step, "label");
                 String status = extractJsonValue(step, "status");
                 List<String> dependsOn = extractJsonArray(step, "dependsOn");
-                
-                stepDataList.add(new StepGraphVisualizer.StepData(id, label, status, dependsOn));
+                if (!id.isEmpty() && !label.isEmpty()) {
+                    stepDataList.add(new StepGraphVisualizer.StepData(id, label, status, dependsOn));
+                }
             }
         } catch (Exception e) {
             log("ERROR", "JSON parsing error: " + e.getMessage());

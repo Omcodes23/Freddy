@@ -5,3 +5,29 @@ api-version: 1.21
 
 depend:
   - Citizens
+
+commands:
+  devtools:
+    description: Paper-native dev tools bridge command set
+    usage: /devtools <help|debugpath|debugmobspawning|serverpack|debugconfig|raid|spawn_armor_trims|test>
+    permission: freddy.devtools.use
+  freddy-observe:
+    description: Observe world state and query nearby entities or blocks
+    usage: /freddy-observe [type] [radius]
+  freddy-craft:
+    description: Autonomous crafting with gather and craft workflow
+    usage: /freddy-craft <item> [amount]
+  freddy-inv:
+    description: Inspect and manage Freddy virtual inventory
+    usage: /freddy-inv <show|clear|add|remove>
+  freddy-mine:
+    description: Mine nearby blocks by material
+    usage: /freddy-mine <material> [quantity]
+  freddy-goal:
+    description: Create and inspect autonomous goals
+    usage: /freddy-goal <add|list|status|help> [args]
+
+permissions:
+  freddy.devtools.use:
+    description: Use /devtools commands
+    default: op

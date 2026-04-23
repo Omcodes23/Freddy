@@ -56,8 +56,17 @@ public class ActionParser {
         if (walkMatcher.find()) {
             try {
                 double x = Double.parseDouble(walkMatcher.group(1));
-                double z = Double.parseDouble(walkMatcher.group(2));
-                return new Action.WalkTo(x, z);
+                double secondArg = Double.parseDouble(walkMatcher.group(2));
+                String thirdGroup = walkMatcher.group(3);
+                if (thirdGroup != null && !thirdGroup.isBlank()) {
+                    // 3-arg form: Walk to X Y Z
+                    double y = secondArg;
+                    double z = Double.parseDouble(thirdGroup);
+                    return new Action.WalkTo(x, y, z);
+                } else {
+                    // 2-arg form: Walk to X Z
+                    return new Action.WalkTo(x, secondArg);
+                }
             } catch (NumberFormatException e) {
                 // Fall through to next pattern
             }

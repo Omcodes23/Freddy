@@ -10,6 +10,7 @@ import net.citizensnpcs.api.npc.NPC;
 
 import java.util.*;
 import java.util.logging.Logger;
+import com.freddy.llm.LLMClient;
 
 /**
  * Intelligent Chat System for Freddy AI
@@ -20,17 +21,15 @@ public class ChatSystem implements Listener {
     private final NPC freddy;
     private final Plugin plugin;
     private final Logger logger;
-    private final com.freddy.llm.LLMClient llmClient;
     
     // Memory of conversations
     private Map<String, ConversationContext> conversations;
     private Queue<String> recentMessages;
     
-    public ChatSystem(NPC freddy, Plugin plugin, com.freddy.llm.LLMClient llmClient) {
+    public ChatSystem(NPC freddy, Plugin plugin) {
         this.freddy = freddy;
         this.plugin = plugin;
         this.logger = plugin.getLogger();
-        this.llmClient = llmClient;
         this.conversations = new HashMap<>();
         this.recentMessages = new LinkedList<>();
         
@@ -61,22 +60,21 @@ public class ChatSystem implements Listener {
      * Generate response using LLM
      */
     private void respondToChat(Player player, String message) {
-        // Build context
         ConversationContext context = getOrCreateContext(player.getName());
         context.addMessage(message);
         
-        // Create prompt for LLM
         String prompt = buildChatPrompt(player, message, context);
         
-        // Get LLM response asynchronously
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                String rawResponse = llmClient.ask(prompt);
+                String rawResponse = LLMClient.ask(prompt);
                 
-                // Clean response
+                if (rawResponse == null || rawResponse.isBlank()) {
+                    rawResponse = "Hmm, I'm not sure what to say...";
+                }
+                
                 final String response = cleanResponse(rawResponse);
                 
-                // Send response back on main thread
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     sendFreddyChat(response);
                     context.addResponse(response);
@@ -181,7 +179,12 @@ public class ChatSystem implements Listener {
      * Check if player is nearby
      */
     private boolean isNearby(Player player) {
-        return freddy.getEntity().getLocation().distance(player.getLocation()) < 50;
+        if (freddy.getEntity() == null || player == null) return false;
+        try {
+            return freddy.getEntity().getLocation().distance(player.getLocation()) < 50;
+        } catch (Exception e) {
+            return false;
+        }
     }
     
     /**

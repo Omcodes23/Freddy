@@ -1,28 +1,3 @@
-//package com.freddy.ai;
-//
-//import com.freddy.llm.LLMClient;
-//
-//public class AgentBrain {
-//
-//    private final String npcName;
-//
-//    public AgentBrain(String npcName) {
-//        this.npcName = npcName;
-//    }
-//
-//    public String respond(String playerName, String message) {
-//
-//        String prompt = """
-//        You are Freddy, a friendly AI character inside Minecraft.
-//        You speak casually like a human player.
-//        Player %s says: "%s"
-//        Reply briefly, friendly, and in character.
-//        """.formatted(playerName, message);
-//
-//        return LLMClient.ask(prompt);
-//    }
-//}
-
 package com.freddy.ai;
 
 import com.freddy.common.telemetry.FreddySnapshot;
@@ -53,7 +28,6 @@ public class AgentBrain {
 
     /**
      * Think about what to do next based on observations
-     * This is the core autonomous thinking method
      */
     public Action think(Observation observation) {
         return think(observation, null);
@@ -73,16 +47,22 @@ public class AgentBrain {
             }
             
             // Ask LLM what to do
-            logger.info("🤔 Asking LLM for decision...");
+            logger.info("[Brain] Asking LLM for decision...");
             String response = LLMClient.ask(prompt);
             
+            // LLMClient now returns null on failure instead of error string
             if (response == null || response.trim().isEmpty()) {
-                logger.warning("⚠️ LLM returned empty response, defaulting to IDLE");
-                currentThought = "Thinking...";
+                logger.warning("[Brain] LLM returned no response, using fallback behavior");
+                currentThought = "LLM unavailable, acting autonomously";
+                idleStreak++;
+                // Fallback: explore if idle too long, otherwise wait
+                if (idleStreak > 1) {
+                    return new Action.Wander();
+                }
                 return new Action.Idle();
             }
             
-            logger.info("💡 LLM Response: " + response);
+            logger.info("[Brain] LLM Response: " + (response.length() > 200 ? response.substring(0, 200) + "..." : response));
             
             // Send LLM response to dashboard
             if (telemetry != null && telemetry.isConnected()) {
@@ -102,10 +82,9 @@ public class AgentBrain {
             return action;
             
         } catch (Exception e) {
-            logger.severe("❌ Error in think(): " + e.getMessage());
-            e.printStackTrace();
-            currentThought = "Error occurred";
-            return new Action.Idle();
+            logger.severe("[Brain] Error in think(): " + e.getMessage());
+            currentThought = "Error occurred, exploring...";
+            return new Action.Wander();
         }
     }
 
@@ -129,18 +108,8 @@ public class AgentBrain {
         return npcName;
     }
 
-    public FreddySnapshot snapshot(
-            String npcName,
-            double x,
-            double y,
-            double z
-    ) {
-        return new FreddySnapshot(
-                npcName,
-                currentThought,
-                currentAction,
-                x, y, z
-        );
+    public FreddySnapshot snapshot(String npcName, double x, double y, double z) {
+        return new FreddySnapshot(npcName, currentThought, currentAction, x, y, z);
     }
 
     /**
@@ -193,8 +162,7 @@ public class AgentBrain {
                     
                     // If target is >50 blocks away, follow nearest player instead (or wander)
                     if (distance > 50) {
-                        logger.warning("⚠️ WALK_TO target too far (" + (int)distance + " blocks), switching to " + 
-                                     (hasPlayers ? "FOLLOW" : "WANDER"));
+                        logger.warning("[Brain] WALK_TO target too far (" + (int)distance + " blocks)");
                         return hasPlayers ? new Action.FollowPlayer(firstPlayer) : new Action.Wander();
                     }
                 }
@@ -211,4 +179,3 @@ public class AgentBrain {
         return proposed;
     }
 }
-

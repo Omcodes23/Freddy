@@ -228,16 +228,81 @@ public class BrainLoop extends BukkitRunnable {
         String lastAction = brain.getCurrentAction() != null ? 
             brain.getCurrentAction() : "Initialized";
         
+        // === Environmental data ===
+        double health = 20.0;
+        int foodLevel = 20;
+        if (entity instanceof Player playerEntity) {
+            health = playerEntity.getHealth();
+            foodLevel = playerEntity.getFoodLevel();
+        }
+
+        // Biome/weather/light
+        String biome = "UNKNOWN";
+        String weather = "CLEAR";
+        int lightLevel = 15;
+        try {
+            World world = loc.getWorld();
+            if (world != null) {
+                biome = world.getBiome(loc).toString();
+                lightLevel = loc.getBlock().getLightLevel();
+                if (world.isThundering()) weather = "THUNDER";
+                else if (world.hasStorm()) weather = "RAIN";
+            }
+        } catch (Exception ignore) {}
+
+        // Nearby notable blocks (resources/ores)
+        List<String> nearbyBlocks = new java.util.ArrayList<>();
+        try {
+            World world = loc.getWorld();
+            if (world != null) {
+                java.util.Map<String, Integer> blockCounts = new java.util.HashMap<>();
+                int r = 8;
+                for (int dx = -r; dx <= r; dx += 2) {
+                    for (int dy = -r; dy <= r; dy += 2) {
+                        for (int dz = -r; dz <= r; dz += 2) {
+                            org.bukkit.block.Block b = world.getBlockAt(
+                                loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz);
+                            String name = b.getType().name();
+                            if (name.endsWith("_ORE") || name.endsWith("_LOG") || name.equals("DIAMOND_BLOCK")) {
+                                blockCounts.merge(name, 1, Integer::sum);
+                            }
+                        }
+                    }
+                }
+                for (var entry : blockCounts.entrySet()) {
+                    nearbyBlocks.add(entry.getKey() + "x" + entry.getValue());
+                }
+            }
+        } catch (Exception ignore) {}
+
+        // Nearby entity types
+        List<String> nearbyEntityTypes = new java.util.ArrayList<>();
+        for (Entity e : nearbyEntities) {
+            if (!(e instanceof Player)) {
+                nearbyEntityTypes.add(e.getType().name());
+            }
+        }
+        // Deduplicate
+        nearbyEntityTypes = nearbyEntityTypes.stream().distinct()
+            .collect(Collectors.toList());
+
+        // Inventory summary
+        List<String> inventorySummary = java.util.List.of();
+        try {
+            var brainLoop = com.freddy.plugin.FreddyPlugin.getAIBrainLoop();
+            if (brainLoop != null && brainLoop.getNpcController() != null) {
+                inventorySummary = brainLoop.getNpcController().getInventory().getSummary();
+            }
+        } catch (Exception ignore) {}
+
         return new Observation(
             nearbyPlayers,
-            loc.getX(),
-            loc.getY(),
-            loc.getZ(),
+            loc.getX(), loc.getY(), loc.getZ(),
             worldTime,
-            null,  // TODO: Add last interaction tracking in Phase 3
-            0,
-            lastAction,
-            lastActionTime
+            null, 0, // last interaction tracking
+            lastAction, lastActionTime,
+            health, foodLevel, biome, weather, lightLevel,
+            nearbyBlocks, nearbyEntityTypes, inventorySummary
         );
     }
     
@@ -246,27 +311,25 @@ public class BrainLoop extends BukkitRunnable {
      * This is needed because getNearbyEntities() can only be called from the main thread.
      */
     private List<Entity> getNearbyEntitiesSync(Entity entity) {
-        // Use a holder to capture the result from the sync task
-        List<Entity> result = new java.util.ArrayList<>();
+        // Use CompletableFuture for proper thread synchronization instead of Thread.sleep
+        java.util.concurrent.CompletableFuture<List<Entity>> future = new java.util.concurrent.CompletableFuture<>();
         
-        // Schedule sync task and wait for it
         Bukkit.getScheduler().runTask(plugin, () -> {
             try {
                 List<Entity> nearby = entity.getNearbyEntities(50, 50, 50);
-                result.addAll(nearby);
+                future.complete(new java.util.ArrayList<>(nearby));
             } catch (Exception e) {
-                logger.warning("⚠️ Failed to get nearby entities: " + e.getMessage());
+                logger.warning("[BrainLoop] Failed to get nearby entities: " + e.getMessage());
+                future.complete(new java.util.ArrayList<>());
             }
         });
         
-        // Wait briefly for task to complete (it's immediate on main thread)
         try {
-            Thread.sleep(50);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            return future.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.warning("[BrainLoop] Timeout waiting for entity scan: " + e.getMessage());
+            return new java.util.ArrayList<>();
         }
-        
-        return result;
     }
     
     /**
@@ -284,14 +347,15 @@ public class BrainLoop extends BukkitRunnable {
         switch (action.type) {
             case WALK_TO:
                 if (action instanceof Action.WalkTo walk) {
+                    double targetY = walk.hasY() ? walk.y : entity.getLocation().getY();
                     Location target = new Location(
                         entity.getWorld(),
                         walk.x,
-                        entity.getLocation().getY(),
+                        targetY,
                         walk.z
                     );
                     freddy.getNavigator().setTarget(target);
-                    logger.info("🚶 Walking to: " + String.format("%.1f, %.1f", walk.x, walk.z));
+                    logger.info("[BrainLoop] Walking to: " + String.format("%.1f, %.1f, %.1f", walk.x, targetY, walk.z));
                 }
                 break;
                 
@@ -300,9 +364,9 @@ public class BrainLoop extends BukkitRunnable {
                     Player target = Bukkit.getPlayer(follow.playerName);
                     if (target != null && target.isOnline()) {
                         freddy.getNavigator().setTarget(target, false);
-                        logger.info("🏃 Following player: " + follow.playerName);
+                        logger.info("[BrainLoop] Following player: " + follow.playerName);
                     } else {
-                        logger.warning("⚠️ Player not found: " + follow.playerName);
+                        logger.warning("[BrainLoop] Player not found: " + follow.playerName);
                         freddy.getNavigator().cancelNavigation();
                     }
                 }
@@ -310,7 +374,7 @@ public class BrainLoop extends BukkitRunnable {
                 
             case IDLE:
                 freddy.getNavigator().cancelNavigation();
-                logger.info("🧘 Standing idle");
+                logger.info("[BrainLoop] Standing idle");
                 break;
                 
             case LOOK_AT:
@@ -318,9 +382,7 @@ public class BrainLoop extends BukkitRunnable {
                     Player target = Bukkit.getPlayer(look.target);
                     if (target != null && target.isOnline()) {
                         freddy.faceLocation(target.getLocation());
-                        logger.info("👀 Looking at: " + look.target);
-                    } else {
-                        logger.warning("⚠️ Cannot look at - target not found: " + look.target);
+                        logger.info("[BrainLoop] Looking at: " + look.target);
                     }
                 }
                 break;
@@ -329,23 +391,49 @@ public class BrainLoop extends BukkitRunnable {
                 if (action instanceof Action.Respond respond) {
                     String message = "§a[" + freddy.getName() + "] §f" + respond.message;
                     Bukkit.broadcastMessage(message);
-                    logger.info("💬 Said: " + respond.message);
+                    logger.info("[BrainLoop] Said: " + respond.message);
                 }
                 break;
                 
             case WANDER:
-                // Random wander within 10 blocks
                 var base = entity.getLocation();
-                double randomX = base.getX() + (Math.random() * 10) - 5;
-                double randomZ = base.getZ() + (Math.random() * 10) - 5;
+                double randomX = base.getX() + (Math.random() * 20) - 10;
+                double randomZ = base.getZ() + (Math.random() * 20) - 10;
                 Location wanderTarget = new Location(
-                    entity.getWorld(),
-                    randomX,
-                    base.getY(),
-                    randomZ
+                    entity.getWorld(), randomX, base.getY(), randomZ
                 );
                 freddy.getNavigator().setTarget(wanderTarget);
-                logger.info("🎲 Wandering to: " + String.format("%.1f, %.1f", randomX, randomZ));
+                logger.info("[BrainLoop] Wandering to: " + String.format("%.1f, %.1f", randomX, randomZ));
+                break;
+
+            case MINE_BLOCK:
+                if (action instanceof Action.MineBlock mine) {
+                    logger.info("[BrainLoop] Mining: " + mine.blockType);
+                    // Handled by AIBrainLoop/NPCController
+                }
+                break;
+
+            case ATTACK_ENTITY:
+                if (action instanceof Action.AttackEntity attack) {
+                    logger.info("[BrainLoop] Attacking: " + attack.entityName);
+                    // Handled by AIBrainLoop/NPCController
+                }
+                break;
+
+            case EAT_FOOD:
+                logger.info("[BrainLoop] Eating food");
+                break;
+
+            case PLACE_BLOCK:
+                if (action instanceof Action.PlaceBlock place) {
+                    logger.info("[BrainLoop] Placing: " + place.blockType);
+                }
+                break;
+
+            case PICKUP_ITEM:
+                if (action instanceof Action.PickupItem pickup) {
+                    logger.info("[BrainLoop] Picking up: " + pickup.itemName);
+                }
                 break;
         }
     }
@@ -404,7 +492,7 @@ public class BrainLoop extends BukkitRunnable {
         scene.append("║ VISUAL: ACTIVE | BIOME: ");
         World world = loc.getWorld();
         if (world != null) {
-            scene.append(world.getBiome(loc).name());
+            scene.append(world.getBiome(loc).toString());
         }
         scene.append(" | Y: ").append((int)obs.currentY()).append(" ║");
         

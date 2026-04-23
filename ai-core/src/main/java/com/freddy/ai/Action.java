@@ -40,16 +40,31 @@ public abstract class Action {
      * Walk to specific coordinates
      */
     public static class WalkTo extends Action {
-        public final double x, z;
+        public final double x, y, z;
         
         public WalkTo(double x, double z) {
             super(ActionType.WALK_TO);
             this.x = x;
+            this.y = Double.NaN; // Y not specified, caller should use current Y
             this.z = z;
+        }
+
+        public WalkTo(double x, double y, double z) {
+            super(ActionType.WALK_TO);
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        public boolean hasY() {
+            return !Double.isNaN(y);
         }
         
         @Override
         public String toString() {
+            if (hasY()) {
+                return "WALK_TO(" + String.format("%.1f", x) + ", " + String.format("%.1f", y) + ", " + String.format("%.1f", z) + ")";
+            }
             return "WALK_TO(" + String.format("%.1f", x) + ", " + String.format("%.1f", z) + ")";
         }
     }

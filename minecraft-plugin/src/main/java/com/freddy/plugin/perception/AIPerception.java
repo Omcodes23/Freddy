@@ -1,9 +1,10 @@
 package com.freddy.plugin.perception;
 
 import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
-import org.bukkit.block.Block;
 import java.util.*;
 
 /**
@@ -14,7 +15,7 @@ public class AIPerception {
     
     private final Location npcLocation;
     private final double perceptionRadius;
-    private final float yaw; // Direction facing
+    private final float yaw;
     
     private List<PlayerPerception> seenPlayers;
     private List<BlockPerception> seenBlocks;
@@ -26,7 +27,7 @@ public class AIPerception {
         this.yaw = yaw;
         this.seenPlayers = new ArrayList<>();
         this.seenBlocks = new ArrayList<>();
-        this.environment = new EnvironmentData();
+        this.environment = buildEnvironmentData(npcLocation);
     }
     
     /**
@@ -57,14 +58,52 @@ public class AIPerception {
             }
         }
         
-        // Scan blocks ahead (simplified)
+        // Scan blocks ahead
         scanBlocksAhead();
+        
+        // Update environment from real world
+        environment = buildEnvironmentData(npcLocation);
         
         return new POVData(seenPlayers, seenBlocks, environment);
     }
+
+    /**
+     * Build environment data from the REAL world state (no more hardcoding)
+     */
+    private EnvironmentData buildEnvironmentData(Location loc) {
+        EnvironmentData env = new EnvironmentData();
+        if (loc == null || loc.getWorld() == null) {
+            return env;
+        }
+
+        World world = loc.getWorld();
+        Block block = loc.getBlock();
+
+        // Real light level
+        env.blockLight = block.getLightFromBlocks();
+        env.skyLight = block.getLightFromSky();
+        env.brightness = block.getLightLevel();
+
+        // Real weather
+        if (world.isThundering()) {
+            env.weather = "THUNDER";
+        } else if (world.hasStorm()) {
+            env.weather = "RAIN";
+        } else {
+            env.weather = "CLEAR";
+        }
+
+        // Real biome
+        try {
+            env.biome = world.getBiome(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()).toString();
+        } catch (Exception e) {
+            env.biome = "UNKNOWN";
+        }
+
+        return env;
+    }
     
     private void scanBlocksAhead() {
-        // Scan 3D grid in front of Freddy
         Location center = npcLocation.clone().add(
             getDirectionVector().multiply(5)
         );
@@ -75,7 +114,7 @@ public class AIPerception {
                     Location blockLoc = center.clone().add(x, y, z);
                     Block block = blockLoc.getBlock();
                     
-                    if (block.getType().toString().equals("AIR")) continue;
+                    if (block.getType().isAir()) continue;
                     
                     double distance = npcLocation.distance(blockLoc);
                     seenBlocks.add(new BlockPerception(
@@ -89,13 +128,11 @@ public class AIPerception {
     }
     
     private boolean isVisible(Location target) {
-        // Simple line of sight check
         double distance = npcLocation.distance(target);
         return distance <= perceptionRadius;
     }
     
     private double getRelativeAngle(Location target) {
-        // Get angle relative to where NPC is facing
         double dx = target.getX() - npcLocation.getX();
         double dz = target.getZ() - npcLocation.getZ();
         double angle = Math.atan2(dx, dz) * 180 / Math.PI;
@@ -103,7 +140,6 @@ public class AIPerception {
     }
     
     private double getVerticalAngle(Location target) {
-        // Pitch angle (up/down)
         double dy = target.getY() - npcLocation.getY();
         double dx = target.getX() - npcLocation.getX();
         double dz = target.getZ() - npcLocation.getZ();
@@ -112,7 +148,7 @@ public class AIPerception {
     }
     
     private org.bukkit.util.Vector getDirectionVector() {
-        double radians = Math.toRadians(yaw + 90); // Bukkit yaw offset
+        double radians = Math.toRadians(yaw + 90);
         double x = Math.cos(radians);
         double z = Math.sin(radians);
         return new org.bukkit.util.Vector(x, 0, z).normalize();
@@ -142,18 +178,20 @@ public class AIPerception {
         @Override
         public String toString() {
             return String.format(
-                "POV{players=%d, blocks=%d, brightness=%d°C}",
+                "POV{players=%d, blocks=%d, light=%d, weather=%s, biome=%s}",
                 players.size(), blocks.size(), 
-                (int) environment.brightness
+                (int) environment.brightness,
+                environment.weather,
+                environment.biome
             );
         }
     }
     
     public static class PlayerPerception {
         public final String name;
-        public final double distance;        // meters
-        public final double angle;           // -180 to 180 (relative to facing)
-        public final double verticalAngle;   // -90 to 90 (up/down)
+        public final double distance;
+        public final double angle;
+        public final double verticalAngle;
         public final double health;
         public final int hunger;
         
@@ -185,7 +223,7 @@ public class AIPerception {
     public static class BlockPerception {
         public final String blockType;
         public final double distance;
-        public final int[] relativePosition; // [x, y, z] relative to center
+        public final int[] relativePosition;
         
         public BlockPerception(String blockType, double distance, int[] relativePosition) {
             this.blockType = blockType;
@@ -202,17 +240,17 @@ public class AIPerception {
     }
     
     public static class EnvironmentData {
-        public double brightness;    // 0-15 light level
-        public String weather;       // CLEAR, RAIN, THUNDER
-        public String biome;         // PLAINS, FOREST, etc
+        public double brightness;
+        public String weather;
+        public String biome;
         public int skyLight;
         public int blockLight;
         
         public EnvironmentData() {
-            this.brightness = 12;
+            this.brightness = 0;
             this.weather = "CLEAR";
-            this.biome = "PLAINS";
-            this.skyLight = 15;
+            this.biome = "UNKNOWN";
+            this.skyLight = 0;
             this.blockLight = 0;
         }
     }

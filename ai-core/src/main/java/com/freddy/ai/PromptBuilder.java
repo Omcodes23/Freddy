@@ -1,8 +1,10 @@
 package com.freddy.ai;
 
+import java.util.List;
+
 /**
  * Builds context-aware prompts for the LLM.
- * Responsible for formatting observations into natural language.
+ * Includes full environmental and inventory context so the AI can make informed decisions.
  */
 public class PromptBuilder {
     
@@ -19,44 +21,71 @@ public class PromptBuilder {
         StringBuilder sb = new StringBuilder();
         
         // System role and personality
-        sb.append("You are ").append(npcName).append(", a friendly AI character in Minecraft.\n");
+        sb.append("You are ").append(npcName).append(", an autonomous AI character in Minecraft.\n");
         sb.append("You are proactive, curious, and avoid standing still.\n");
-        sb.append("You speak naturally, like a player in the game.\n");
-        sb.append("You make decisions based on what's happening around you.\n");
-        sb.append("If players are nearby, prefer to engage/follow them. If no players, explore new ground.\n");
+        sb.append("You make decisions based on your surroundings, health, and inventory.\n");
         sb.append("Do NOT idle repeatedly. Choose a meaningful action every tick.\n\n");
         
         // Current situation
-        sb.append("CURRENT SITUATION:\n");
-        sb.append("- Location: X=").append(String.format("%.1f", observation.currentX()))
+        sb.append("CURRENT STATUS:\n");
+        sb.append("- Position: X=").append(String.format("%.1f", observation.currentX()))
             .append(", Y=").append(String.format("%.1f", observation.currentY()))
             .append(", Z=").append(String.format("%.1f", observation.currentZ())).append("\n");
+        sb.append("- Health: ").append(String.format("%.1f", observation.health())).append("/20");
+        if (observation.isLowHealth()) sb.append(" [LOW!]");
+        sb.append("\n");
+        sb.append("- Hunger: ").append(observation.foodLevel()).append("/20");
+        if (observation.isHungry()) sb.append(" [HUNGRY!]");
+        sb.append("\n");
+        sb.append("- Time: ").append(observation.getTimeOfDay());
+        sb.append(observation.isDayTime() ? " (day)" : " (night - mobs spawn!)");
+        sb.append("\n");
+        sb.append("- Biome: ").append(observation.biome() != null ? observation.biome() : "Unknown").append("\n");
+        sb.append("- Weather: ").append(observation.weather() != null ? observation.weather() : "Clear").append("\n");
+        sb.append("- Light level: ").append(observation.lightLevel()).append("/15\n");
         
         // Nearby players
         sb.append("- Nearby players: ");
         if (observation.nearbyPlayers() == null || observation.nearbyPlayers().isEmpty()) {
             sb.append("[none]");
         } else {
-            sb.append(observation.nearbyPlayers());
+            sb.append(String.join(", ", observation.nearbyPlayers()));
         }
         sb.append("\n");
         
-        // Time of day
-        sb.append("- Time: ").append(observation.getTimeOfDay());
-        if (observation.isDayTime()) {
-            sb.append(" (day)");
-        } else {
-            sb.append(" (night)");
+        // Nearby blocks/resources
+        List<String> blocks = observation.nearbyBlocks();
+        if (blocks != null && !blocks.isEmpty()) {
+            sb.append("- Nearby resources/blocks: ");
+            sb.append(String.join(", ", blocks.subList(0, Math.min(blocks.size(), 10))));
+            sb.append("\n");
         }
-        sb.append("\n");
+        
+        // Nearby entities (mobs/animals)
+        List<String> entities = observation.nearbyEntities();
+        if (entities != null && !entities.isEmpty()) {
+            sb.append("- Nearby mobs/animals: ");
+            sb.append(String.join(", ", entities.subList(0, Math.min(entities.size(), 8))));
+            sb.append("\n");
+        }
+
+        // Inventory
+        List<String> inv = observation.inventorySummary();
+        if (inv != null && !inv.isEmpty()) {
+            sb.append("- Inventory: ");
+            sb.append(String.join(", ", inv.subList(0, Math.min(inv.size(), 12))));
+            sb.append("\n");
+        } else {
+            sb.append("- Inventory: [empty]\n");
+        }
         
         // Recent activity
         if (observation.lastInteractionPlayer() != null && 
             !observation.lastInteractionPlayer().isEmpty()) {
             long secAgo = observation.timeSinceLastInteraction();
-            if (secAgo < 300) { // Within 5 minutes
+            if (secAgo < 300) {
                 sb.append("- Last interaction: ").append(observation.lastInteractionPlayer())
-                    .append(" (").append(secAgo).append(" seconds ago)\n");
+                    .append(" (").append(secAgo).append("s ago)\n");
             }
         }
         
@@ -67,61 +96,43 @@ public class PromptBuilder {
         
         sb.append("\n");
         
-        // Available actions with REALISTIC examples based on current position
-        int currentX = (int) observation.currentX();
-        int currentZ = (int) observation.currentZ();
-        int nearbyX1 = currentX + 15;
-        int nearbyZ1 = currentZ - 20;
-        int nearbyX2 = currentX - 10;
-        int nearbyZ2 = currentZ + 25;
+        // Available actions
         
-        sb.append("AVAILABLE ACTIONS:\n");
-        sb.append("1. \"Follow [player]\" - trail a nearby player (e.g., \"Follow aimbotxomega\")\n");
-        sb.append("2. \"Look at [player]\" - face and observe (e.g., \"Look at aimbotxomega\")\n");
+        sb.append("AVAILABLE ACTIONS (reply with ONE):\n");
+        sb.append("1. \"Follow [player]\" - follow a nearby player\n");
+        sb.append("2. \"Look at [player]\" - face and observe\n");
         sb.append("3. \"Attack [entity]\" - attack a mob (e.g., \"Attack zombie\")\n");
-        sb.append("4. \"Mine [block]\" - break a nearby block (e.g., \"Mine stone\", \"Mine tree\")\n");
-        sb.append("5. \"Walk to X Z\" - explore NEARBY locations only! From your current position (")
-            .append(currentX).append(" ").append(currentZ)
-            .append("), you could walk to (").append(nearbyX1).append(" ").append(nearbyZ1)
-            .append(") or (").append(nearbyX2).append(" ").append(nearbyZ2).append(")\n");
-        sb.append("6. \"Say [message]\" - chat (e.g., \"Say Hello there!\")\n");
-        sb.append("7. \"Wander\" - move randomly nearby\n");
-        sb.append("8. \"Idle\" - only if you truly have nothing to do (avoid)\n");
-        sb.append("\nCRITICAL: When using 'Walk to X Z', coordinates MUST be within 50 blocks!\n");
-        sb.append("Your current position: (").append(currentX).append(", ").append(currentZ).append(")\n");
-        sb.append("Valid range: X between ").append(currentX - 50).append(" and ").append(currentX + 50);
-        sb.append(", Z between ").append(currentZ - 50).append(" and ").append(currentZ + 50).append("\n\n");
+        sb.append("4. \"Mine [block]\" - mine a block (e.g., \"Mine oak_log\", \"Mine stone\")\n");
+        sb.append("5. \"Walk to X Z\" - move to nearby location (within 50 blocks!)\n");
+        sb.append("6. \"Say [message]\" - chat in game\n");
+        sb.append("7. \"Wander\" - explore randomly nearby\n");
+        sb.append("8. \"Idle\" - rest (avoid using this)\n\n");
         
-        // Instruction
-        sb.append("What should you do RIGHT NOW?\n");
-        sb.append("Rules:\n");
-        sb.append("- If players are nearby, consider following them, talking to them, or showing off by mining/building.\n");
-        sb.append("- If you see trees or stone, consider mining them to gather resources.\n");
-        sb.append("- If mobs are nearby, consider attacking them.\n");
-        sb.append("- If no players nearby, explore, mine resources, or wander.\n");
-        sb.append("- Do NOT return Idle repeatedly.\n");
-        sb.append("- Be proactive like a real Minecraft player!\n");
-        sb.append("- Reply with ONLY ONE action, nothing else.\n\n");
+        // Decision priorities based on context
+        sb.append("PRIORITIES:\n");
+        if (observation.isLowHealth()) {
+            sb.append("- YOUR HEALTH IS LOW! Eat food or retreat to safety.\n");
+        }
+        if (observation.isHungry()) {
+            sb.append("- You are hungry. Find food (hunt animals or eat from inventory).\n");
+        }
+        if (!observation.isDayTime()) {
+            sb.append("- It's nighttime. Be cautious of hostile mobs.\n");
+        }
+        if (observation.nearbyPlayers() != null && !observation.nearbyPlayers().isEmpty()) {
+            sb.append("- Players are nearby. Consider interacting with them.\n");
+        }
+        if (blocks != null && !blocks.isEmpty()) {
+            sb.append("- Useful resources are visible. Consider mining them.\n");
+        }
         
-        // Examples with NEARBY coordinates
-        sb.append("Example responses:\n");
-        sb.append("- \"Mine tree\" (if you see trees nearby)\n");
-        sb.append("- \"Mine stone\" (if you see stone nearby)\n");
-        sb.append("- \"Attack zombie\" (if hostile mob nearby)\n");
-        sb.append("- \"Follow aimbotxomega\"\n");
-        sb.append("- \"Look at aimbotxomega\"\n");
-        sb.append("- \"Walk to ").append(nearbyX1).append(" ").append(nearbyZ1).append("\" (nearby)\n");
-        sb.append("- \"Say Hi there!\"\n");
-        sb.append("- \"Wander\"\n");
+        sb.append("\nReply with ONLY ONE action. Be proactive like a real Minecraft player.\n");
         
         return sb.toString();
     }
     
-    /**
-     * Extract just the system role (for testing)
-     */
     public String getSystemRole() {
-        return "You are " + npcName + ", a friendly AI character in Minecraft.";
+        return "You are " + npcName + ", an autonomous AI character in Minecraft.";
     }
     
     /**
@@ -129,7 +140,6 @@ public class PromptBuilder {
      */
     public String buildSimplePrompt(Observation observation) {
         StringBuilder sb = new StringBuilder();
-        
         sb.append("You are ").append(npcName).append(" in Minecraft. ");
         
         if (observation.nearbyPlayers() != null && !observation.nearbyPlayers().isEmpty()) {
@@ -138,8 +148,11 @@ public class PromptBuilder {
             sb.append("No players nearby. ");
         }
         
+        if (observation.isLowHealth()) sb.append("Health is low! ");
+        if (observation.isHungry()) sb.append("Hungry! ");
+        
         sb.append("What do you do? Reply with ONE action: ");
-        sb.append("\"Walk to X Z\", \"Follow [player]\", \"Idle\", \"Wander\", or \"Say [message]\"");
+        sb.append("\"Walk to X Z\", \"Follow [player]\", \"Mine [block]\", \"Attack [mob]\", \"Wander\", or \"Say [message]\"");
         
         return sb.toString();
     }

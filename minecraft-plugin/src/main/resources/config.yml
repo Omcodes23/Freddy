@@ -1,0 +1,30 @@
+# FreddyAI Configuration
+# All settings can be customized here instead of editing Java code
+
+# LLM Settings
+llm:
+  model: "qwen2.5:3b"
+  url: "http://localhost:11434/api/generate"
+  timeout-ms: 12000
+
+# NPC Settings
+npc:
+  name: "Freddy"
+  perception-radius: 50
+
+# Telemetry (dashboard connection)
+telemetry:
+  host: "localhost"
+  port: 25566
+
+# Command Server (dashboard commands)
+command-server:
+  port: 25567
+
+# AI Behavior
+ai:
+  brain-loop-interval-ticks: 40
+  max-walk-distance: 50
+  wander-radius: 20
+  combat-range: 4.0
+  attack-cooldown-ms: 500

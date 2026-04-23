@@ -1,0 +1,32 @@
+# Citizens NPC Storage
+last-created-npc-id: 1
+npc:
+- metadata:
+    cached-skin-uuid: 60f5bcb7-10b2-4b97-a58b-dc7b8153253f
+    cached-skin-uuid-name: beb1925a-37a4-4db8-8c02-e438809f2b5b
+  traits:
+    scoreboardtrait:
+      tags:
+      - CITIZENS_NPC
+    owner:
+      uuid: 504136c7-3ba8-3379-904c-20289cc8dfd0
+    skintrait:
+      signature: Zb396aXjztEGK8qqWaDIoa/2cvLCNUJtL80giv3vts2g9nbfgR6SzWT7jpssA/mu6i19H3E1+FH4OTLUF8qkfejPkxvlHIHDNDJUyVMVAnN3Rt8UqAh2sFHpLvIGH1HhJ+FORt7xaBou5EAWHr6Dmx5k0nRzK/d1ih7OkQ0rse6odcmCNcQ9Q5LK7AiclDtE49P3xb+qsZzwtEYvObdewLhC+v2EU0uoEanuzHE//wG0BD9/9KUXp5V5yJF7cgimzoadwh3HamJmkNJy3F6w+9weDYDRsbbqolBHRXmyDRYDEFLKyGdsRSfMI1Q3GU0s6N9dLi9aIKZZamRxDnEDGLq9sHF0UbnKINJNwB3I0aIGH63jgql/OhA+1U5EmJNtmxFfRyK5MN1qqwqlcEqiacU29uUTCuDoiEYsKXbbbMkEd437Icu1ArTLbthGLzl/giHsJ1elUn9Nr/o0Vd8GdKDJ+p5YXYbYFgOq77yv/YUec8x3SuOJVYfvNiJg8TpXAa475pJNAmrQF5kIYMgQZEw+cdUmXxVAXsWmI1MayKacP3VuZsgxCTVR8uYAeVuN+cmdBzjfRfHq2mcz4af3iPsHKN0lcgNbGDCwVHoyDxwh/UoLpl0tTZQXt0Tf/xv0DY8zCrdrIhSzRc+xdIdBcV3j2XBgB8dxeFsa/HFQQt4=
+      skinName: beb1925a-37a4-4db8-8c02-e438809f2b5b
+      textureRaw: ewogICJ0aW1lc3RhbXAiIDogMTc2NjMzMjE3ODI2NCwKICAicHJvZmlsZUlkIiA6ICI1MzE4YWJhNDJiMTk0ODNiODFiMWY2N2Y1ODVjNDdkNSIsCiAgInByb2ZpbGVOYW1lIiA6ICJocHllZiIsCiAgInNpZ25hdHVyZVJlcXVpcmVkIiA6IHRydWUsCiAgInRleHR1cmVzIiA6IHsKICAgICJTS0lOIiA6IHsKICAgICAgInVybCIgOiAiaHR0cDovL3RleHR1cmVzLm1pbmVjcmFmdC5uZXQvdGV4dHVyZS9iMDI1OGRiZWI5Zjg0NDE3NTE0ZTk0NWU3ZjNmNmFiZDEwOWRkNTFiODZkMTI4NDJhYzA2YWJkZTk4OTlkMWQyIgogICAgfQogIH0KfQ==
+    location:
+      worldid: 2ec4e73e-5833-4426-ad80-1356c24f94bf
+      x: -329.7024
+      y: 64.0
+      z: -50.501
+      bodyYaw: -89.98483
+      pitch: 44.1001
+      yaw: -89.9848
+    type: PLAYER
+  traitnames: spawned,scoreboardtrait,owner,rotationtrait,skintrait,location,type,inventory,targetable,chunktickettrait
+  name: Freddy
+  navigator:
+    usedefaultstuckaction: false
+    speedmodifier: 1.0
+    avoidwater: false
+  uuid: d76f83ad-47a7-435f-8ddc-fe46465b4460

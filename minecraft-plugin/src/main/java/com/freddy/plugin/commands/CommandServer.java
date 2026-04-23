@@ -10,8 +10,13 @@ import java.net.Socket;
 import java.util.logging.Logger;
 
 /**
- * Command Server - listens on TCP 25567 for dashboard commands
- * Format: GOAL:<goal_name>
+ * Command Server - listens on TCP 25567 for dashboard commands.
+ * Supported formats:
+ * GOAL:<goal_name>
+ * ACTION:<name>[:target[:extra]]
+ * CRAFT:<item>[:amount]
+ * OBSERVE
+ * RETURN_HOME
  */
 public class CommandServer extends Thread {
     private static final int PORT = 25567;
@@ -51,18 +56,10 @@ public class CommandServer extends Thread {
     private void processCommand(String command) {
         logger.info("📨 Received command: " + command);
 
-        if (command.startsWith("GOAL:")) {
-            String goalName = command.substring(5).trim();
-            logger.info("🎯 Setting AI goal: " + goalName);
-
-            // Call plugin's setAIGoal on main thread
-            Bukkit.getScheduler().runTask(
-                Bukkit.getPluginManager().getPlugin("FreddyAI"),
-                () -> FreddyPlugin.setAIGoal(goalName)
-            );
-        } else {
-            logger.warning("⚠️ Unknown command: " + command);
-        }
+        Bukkit.getScheduler().runTask(
+            Bukkit.getPluginManager().getPlugin("FreddyAI"),
+            () -> FreddyPlugin.handleDashboardCommand(command)
+        );
     }
 
     public void shutdown() {

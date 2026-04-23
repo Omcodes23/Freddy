@@ -16,10 +16,10 @@ import java.util.*;
  */
 public class StepGraphVisualizer extends Pane {
     
-    private static final double NODE_WIDTH = 200;
-    private static final double NODE_HEIGHT = 60;
+    private static final double NODE_WIDTH = 280;
+    private static final double NODE_HEIGHT = 92;
     private static final double VERTICAL_SPACING = 100;
-    private static final double HORIZONTAL_SPACING = 250;
+    private static final double HORIZONTAL_SPACING = 110;
     
     private static final Color COLOR_PENDING = Color.web("#8b949e");
     private static final Color COLOR_IN_PROGRESS = Color.web("#1f6feb");
@@ -79,7 +79,22 @@ public class StepGraphVisualizer extends Pane {
         layoutNodes();
         
         // Draw graph
+        resizeCanvasForContent();
         draw();
+    }
+
+    private void resizeCanvasForContent() {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        double maxY = 0;
+        for (StepNode node : nodes) {
+            maxY = Math.max(maxY, node.y + NODE_HEIGHT);
+        }
+        double desiredHeight = Math.max(500, maxY + 40);
+        if (Math.abs(canvas.getHeight() - desiredHeight) > 1.0) {
+            canvas.setHeight(desiredHeight);
+        }
     }
     
     private void layoutNodes() {
@@ -99,7 +114,8 @@ public class StepGraphVisualizer extends Pane {
         double startY = 50;
         for (int level = 0; level <= Collections.max(levels.values()); level++) {
             List<StepNode> levelNodes = nodesByLevel.getOrDefault(level, Collections.emptyList());
-            double startX = (canvas.getWidth() - (levelNodes.size() * (NODE_WIDTH + HORIZONTAL_SPACING) - HORIZONTAL_SPACING)) / 2;
+            double totalWidth = levelNodes.size() * (NODE_WIDTH + HORIZONTAL_SPACING) - HORIZONTAL_SPACING;
+            double startX = Math.max(20, (canvas.getWidth() - totalWidth) / 2);
             
             for (int i = 0; i < levelNodes.size(); i++) {
                 StepNode node = levelNodes.get(i);
@@ -226,11 +242,11 @@ public class StepGraphVisualizer extends Pane {
         gc.setFont(Font.font("Consolas", 11));
         gc.setTextAlign(TextAlignment.LEFT);
         
-        String label = node.label;
-        if (label.length() > 22) {
-            label = label.substring(0, 22) + "...";
+        String label = node.label == null ? "" : node.label;
+        String[] wrapped = wrapLabel(label, 42, 3);
+        for (int i = 0; i < wrapped.length; i++) {
+            gc.fillText(wrapped[i], node.x + 50, node.y + 30 + (i * 14));
         }
-        gc.fillText(label, node.x + 50, node.y + NODE_HEIGHT / 2 + 5);
         
         // Draw status icon
         String statusIcon = getStatusIcon(node.status);
@@ -255,6 +271,44 @@ public class StepGraphVisualizer extends Pane {
             case "FAILED": return "✗";
             default: return "○";
         }
+    }
+
+    private String[] wrapLabel(String text, int maxCharsPerLine, int maxLines) {
+        if (text == null || text.isBlank()) {
+            return new String[] {""};
+        }
+        List<String> lines = new ArrayList<>();
+        String[] words = text.split("\\s+");
+        StringBuilder current = new StringBuilder();
+        boolean overflowed = false;
+        for (String word : words) {
+            if (current.length() == 0) {
+                current.append(word);
+                continue;
+            }
+            if (current.length() + 1 + word.length() <= maxCharsPerLine) {
+                current.append(" ").append(word);
+            } else {
+                lines.add(current.toString());
+                current = new StringBuilder(word);
+                if (lines.size() >= maxLines) {
+                    overflowed = true;
+                    break;
+                }
+            }
+        }
+        if (lines.size() < maxLines && current.length() > 0) {
+            lines.add(current.toString());
+        }
+        if (lines.size() == maxLines && overflowed) {
+            String last = lines.get(maxLines - 1);
+            if (!last.endsWith("...")) {
+                lines.set(maxLines - 1, last.length() > maxCharsPerLine - 3
+                    ? last.substring(0, maxCharsPerLine - 3) + "..."
+                    : last + "...");
+            }
+        }
+        return lines.toArray(new String[0]);
     }
     
     private void drawEmptyState() {

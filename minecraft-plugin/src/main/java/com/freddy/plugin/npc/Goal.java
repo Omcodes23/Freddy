@@ -12,10 +12,16 @@ public class Goal {
         MINE_DIAMONDS,
         BUILD_STRUCTURE,
         EXPLORE_AREA,
+        AUTOPILOT,
         RETURN_HOME,
+        RETURN_TO_PLAYER,
         FOLLOW_PLAYER,
         HUNT_ANIMALS,
-        FARM_CROPS
+        FARM_CROPS,
+        CREATE_ITEM,
+        PROTECT_PLAYER,
+        FIGHT_MOB,
+        SPEEDRUN
     }
     
     public enum GoalStatus {
@@ -93,6 +99,10 @@ public class Goal {
         return endTime - createdAt;
     }
     
+    public boolean isTimedOut(long timeoutMs) {
+        return getElapsedTime() > timeoutMs;
+    }
+    
     // Step management
     public void setSteps(List<GoalStep> steps) {
         this.steps = steps;
@@ -123,6 +133,21 @@ public class Goal {
                 com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
                 if (t != null) {
                     t.send("GOAL_STEP_UPDATE:{\"id\":\"" + s.getId() + "\",\"status\":\"COMPLETED\"}");
+                }
+            } catch (Exception ignore) { }
+            currentStepIndex++;
+        }
+    }
+
+    public void failCurrentStep(String reason) {
+        if (currentStepIndex < steps.size()) {
+            GoalStep s = steps.get(currentStepIndex);
+            s.setStatus(GoalStep.StepStatus.FAILED);
+            try {
+                com.freddy.common.TelemetryClient t = com.freddy.plugin.FreddyPlugin.getTelemetry();
+                if (t != null) {
+                    String safeReason = reason == null ? "failed" : reason.replace("\"", "'");
+                    t.send("GOAL_STEP_UPDATE:{\"id\":\"" + s.getId() + "\",\"status\":\"FAILED\",\"reason\":\"" + safeReason + "\"}");
                 }
             } catch (Exception ignore) { }
             currentStepIndex++;
